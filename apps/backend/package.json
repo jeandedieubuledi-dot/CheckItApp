@@ -6,7 +6,7 @@
     "start": "nest start",
     "start:dev": "nest start --watch",
     "build": "nest build",
-    "start:prod": "prisma migrate deploy --schema=/app/apps/backend/prisma/schema.prisma && node /app/apps/backend/dist/main",
+    "start:prod": "node /app/apps/backend/dist/main",
     "lint": "eslint \"src/**/*.ts\"",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
