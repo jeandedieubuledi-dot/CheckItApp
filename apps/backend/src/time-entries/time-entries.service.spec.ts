@@ -1,0 +1,325 @@
+import { Test } from '@nestjs/testing';
+import { NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { UsersService } from '../users/users.service';
+import { TimeEntriesService } from './time-entries.service';
+
+describe('TimeEntriesService', () => {
+  let service: TimeEntriesService;
+  let prisma: {
+    user: { findFirst: jest.Mock; findMany: jest.Mock };
+    site: { findFirst: jest.Mock };
+    siteDevice: { findFirst: jest.Mock };
+    timeEntry: { create: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock; update: jest.Mock };
+  };
+  let usersService: { resolveByPin: jest.Mock };
+
+  beforeEach(async () => {
+    prisma = {
+      user: { findFirst: jest.fn(), findMany: jest.fn() },
+      site: { findFirst: jest.fn() },
+      siteDevice: { findFirst: jest.fn() },
+      timeEntry: {
+        create: jest.fn(),
+        findMany: jest.fn(),
+        findFirst: jest.fn(),
+        update: jest.fn(),
+      },
+    };
+    usersService = { resolveByPin: jest.fn() };
+
+    const module = await Test.createTestingModule({
+      providers: [
+        TimeEntriesService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: UsersService, useValue: usersService },
+      ],
+    }).compile();
+
+    service = module.get(TimeEntriesService);
+  });
+
+  describe('createFromDevice', () => {
+    const device = { deviceId: 'device-1', siteId: 'site-a', companyId: 'company-a' };
+
+    it('resolves the employee by badgeCode, scoped to the device companyId', async () => {
+      prisma.user.findFirst.mockResolvedValue({ id: 'user-1', firstName: 'A', lastName: 'B' });
+      prisma.timeEntry.findFirst.mockResolvedValue(null);
+      prisma.timeEntry.create.mockResolvedValue({ id: 'entry-1' });
+
+      await service.createFromDevice(device, {
+        source: 'badge_scan',
+        badgeCode: 'BADGE123',
+      });
+
+      expect(prisma.user.findFirst).toHaveBeenCalledWith({
+        where: { badgeCode: 'BADGE123', companyId: 'company-a' },
+        select: { id: true, firstName: true, lastName: true },
+      });
+      expect(prisma.timeEntry.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          userId: 'user-1',
+          siteId: 'site-a',
+          deviceId: 'device-1',
+          source: 'badge_scan',
+        }),
+      });
+    });
+
+    it('rejects an unknown badge without creating an entry', async () => {
+      prisma.user.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.createFromDevice(device, {
+          source: 'badge_scan',
+          badgeCode: 'UNKNOWN',
+        }),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(prisma.timeEntry.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a wrong/unknown PIN without creating an entry', async () => {
+      usersService.resolveByPin.mockResolvedValue(null);
+
+      await expect(
+        service.createFromDevice(device, {
+          source: 'pin_code',
+          pin: '0000',
+        }),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(prisma.timeEntry.create).not.toHaveBeenCalled();
+    });
+
+    it('defaults to clock_in when the employee has no prior clock event at this site', async () => {
+      usersService.resolveByPin.mockResolvedValue({ id: 'user-1', firstName: 'A', lastName: 'B' });
+      prisma.timeEntry.findFirst.mockResolvedValue(null);
+      prisma.timeEntry.create.mockResolvedValue({ id: 'entry-1' });
+
+      await service.createFromDevice(device, { source: 'pin_code', pin: '4321' });
+
+      expect(prisma.timeEntry.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ type: 'clock_in' }),
+      });
+    });
+
+    it('flips to clock_out when the last event at this site was a clock_in', async () => {
+      usersService.resolveByPin.mockResolvedValue({ id: 'user-1', firstName: 'A', lastName: 'B' });
+      prisma.timeEntry.findFirst.mockResolvedValue({ type: 'clock_in' });
+      prisma.timeEntry.create.mockResolvedValue({ id: 'entry-1' });
+
+      await service.createFromDevice(device, { source: 'pin_code', pin: '4321' });
+
+      expect(prisma.timeEntry.findFirst).toHaveBeenCalledWith({
+        where: { userId: 'user-1', siteId: 'site-a', type: { in: ['clock_in', 'clock_out'] } },
+        orderBy: { timestamp: 'desc' },
+        select: { type: true },
+      });
+      expect(prisma.timeEntry.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ type: 'clock_out' }),
+      });
+    });
+
+    it('identifies the employee by PIN alone, scoped to the device companyId', async () => {
+      usersService.resolveByPin.mockResolvedValue({ id: 'user-1', badgeCode: null });
+      prisma.timeEntry.findFirst.mockResolvedValue({ type: 'clock_in' });
+      prisma.timeEntry.create.mockResolvedValue({ id: 'entry-1' });
+
+      await service.createFromDevice(device, {
+        source: 'pin_code',
+        pin: '4321',
+      });
+
+      expect(usersService.resolveByPin).toHaveBeenCalledWith('company-a', '4321');
+      expect(prisma.timeEntry.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ userId: 'user-1', source: 'pin_code' }),
+      });
+    });
+  });
+
+  describe('createSelf', () => {
+    const user = { userId: 'user-1', companyId: 'company-a', role: 'employee' };
+
+    it('rejects a gps entry on a site from another company', async () => {
+      prisma.site.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.createSelf(user, {
+          type: 'clock_in' as any,
+          source: 'gps',
+          siteId: 'site-of-company-b',
+          geoLat: 50.8,
+          geoLng: 4.35,
+        }),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.timeEntry.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a qr_scan_own_phone entry on a device from another company', async () => {
+      prisma.siteDevice.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.createSelf(user, {
+          type: 'clock_in' as any,
+          source: 'qr_scan_own_phone',
+          deviceId: 'device-of-company-b',
+        }),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.timeEntry.create).not.toHaveBeenCalled();
+    });
+
+    it('creates the entry for the authenticated user, never a userId from the body', async () => {
+      prisma.site.findFirst.mockResolvedValue({ id: 'site-a', companyId: 'company-a' });
+      prisma.timeEntry.create.mockResolvedValue({ id: 'entry-1' });
+
+      await service.createSelf(user, {
+        type: 'clock_in' as any,
+        source: 'gps',
+        siteId: 'site-a',
+        geoLat: 50.8,
+        geoLng: 4.35,
+      });
+
+      expect(prisma.timeEntry.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ userId: 'user-1', siteId: 'site-a', source: 'gps' }),
+      });
+    });
+  });
+
+  describe('createManual', () => {
+    const manager = { userId: 'manager-1', companyId: 'company-a', role: 'manager' };
+
+    it('refuses to create an entry for a user outside the manager company', async () => {
+      prisma.site.findFirst.mockResolvedValue({ id: 'site-a', companyId: 'company-a' });
+      prisma.user.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.createManual(manager, {
+          userId: 'user-of-company-b',
+          siteId: 'site-a',
+          type: 'clock_in' as any,
+          creationReason: 'Badge perdu',
+        }),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.timeEntry.create).not.toHaveBeenCalled();
+    });
+
+    it('stamps the entry with manual_by_manager, createdBy and creationReason', async () => {
+      prisma.site.findFirst.mockResolvedValue({ id: 'site-a', companyId: 'company-a' });
+      prisma.user.findFirst.mockResolvedValue({ id: 'user-1', companyId: 'company-a' });
+      prisma.timeEntry.create.mockResolvedValue({ id: 'entry-1' });
+
+      await service.createManual(manager, {
+        userId: 'user-1',
+        siteId: 'site-a',
+        type: 'clock_in' as any,
+        creationReason: 'Badge perdu',
+      });
+
+      expect(prisma.timeEntry.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          source: 'manual_by_manager',
+          createdBy: 'manager-1',
+          creationReason: 'Badge perdu',
+        }),
+      });
+    });
+  });
+
+  describe('findAll', () => {
+    it('forces an employee to only see their own entries, ignoring ?userId=', async () => {
+      prisma.timeEntry.findMany.mockResolvedValue([]);
+
+      await service.findAll(
+        { userId: 'user-1', companyId: 'company-a', role: 'employee' },
+        { userId: 'someone-else' } as any,
+      );
+
+      const call = prisma.timeEntry.findMany.mock.calls[0][0];
+      expect(call.where.userId).toBe('user-1');
+      expect(call.where.site).toEqual({ companyId: 'company-a' });
+    });
+
+    it('lets a manager filter by any userId within the company', async () => {
+      prisma.timeEntry.findMany.mockResolvedValue([]);
+
+      await service.findAll(
+        { userId: 'manager-1', companyId: 'company-a', role: 'manager' },
+        { userId: 'user-2' } as any,
+      );
+
+      const call = prisma.timeEntry.findMany.mock.calls[0][0];
+      expect(call.where.userId).toBe('user-2');
+    });
+  });
+
+  describe('update', () => {
+    it('blocks correcting an entry from another company', async () => {
+      prisma.timeEntry.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.update('company-a', 'manager-1', 'entry-of-company-b', {
+          editReason: 'Oubli de pointage',
+        }),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.timeEntry.update).not.toHaveBeenCalled();
+    });
+
+    it('marks the entry isEdited with editedBy and editReason', async () => {
+      prisma.timeEntry.findFirst.mockResolvedValue({ id: 'entry-1' });
+      prisma.timeEntry.update.mockResolvedValue({ id: 'entry-1' });
+
+      await service.update('company-a', 'manager-1', 'entry-1', {
+        editReason: 'Oubli de pointage',
+      });
+
+      expect(prisma.timeEntry.update).toHaveBeenCalledWith({
+        where: { id: 'entry-1' },
+        data: expect.objectContaining({
+          isEdited: true,
+          editedBy: 'manager-1',
+          editReason: 'Oubli de pointage',
+        }),
+      });
+    });
+  });
+
+  describe('getPresence', () => {
+    it('rejects a site from another company', async () => {
+      prisma.site.findFirst.mockResolvedValue(null);
+
+      await expect(service.getPresence('company-a', 'site-of-company-b')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('returns only users whose latest clock event is clock_in', async () => {
+      prisma.site.findFirst.mockResolvedValue({ id: 'site-a', companyId: 'company-a' });
+      prisma.timeEntry.findMany.mockResolvedValue([
+        { userId: 'user-1', type: 'clock_in' },
+        { userId: 'user-2', type: 'clock_in' },
+        { userId: 'user-2', type: 'clock_out' },
+        { userId: 'user-1', type: 'clock_out' },
+        { userId: 'user-1', type: 'clock_in' },
+      ]);
+      prisma.user.findMany.mockResolvedValue([{ id: 'user-1' }]);
+
+      const result = await service.getPresence('company-a', 'site-a');
+
+      expect(prisma.user.findMany).toHaveBeenCalledWith({
+        where: { id: { in: ['user-1'] } },
+        select: { id: true, firstName: true, lastName: true },
+      });
+      expect(result).toEqual([{ id: 'user-1' }]);
+    });
+
+    it('returns an empty list without querying users when nobody is clocked in', async () => {
+      prisma.site.findFirst.mockResolvedValue({ id: 'site-a', companyId: 'company-a' });
+      prisma.timeEntry.findMany.mockResolvedValue([]);
+
+      const result = await service.getPresence('company-a', 'site-a');
+
+      expect(result).toEqual([]);
+      expect(prisma.user.findMany).not.toHaveBeenCalled();
+    });
+  });
+});

@@ -1,0 +1,30 @@
+{
+  "name": "@horaires/checkin-pos",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "dev": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "build": "echo 'build géré via EAS Build, pas via turbo pour le mobile'"
+  },
+  "dependencies": {
+    "@horaires/api-client": "workspace:*",
+    "@horaires/shared-types": "workspace:*",
+    "@horaires/ui-tokens": "workspace:*",
+    "expo": "~51.0.0",
+    "expo-camera": "~15.0.0",
+    "expo-secure-store": "~13.0.2",
+    "expo-status-bar": "~1.12.0",
+    "react": "18.2.0",
+    "react-native": "0.74.0",
+    "react-native-qrcode-svg": "^6.3.2",
+    "react-native-svg": "15.2.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "@types/react": "~18.2.0",
+    "typescript": "^5.4.0"
+  }
+}
