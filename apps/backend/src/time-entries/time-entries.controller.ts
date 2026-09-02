@@ -13,6 +13,7 @@ import { CreateSelfTimeEntryDto } from './dto/create-self-time-entry.dto';
 import { CreateManualTimeEntryDto } from './dto/create-manual-time-entry.dto';
 import { UpdateTimeEntryDto } from './dto/update-time-entry.dto';
 import { FindTimeEntriesQueryDto } from './dto/find-time-entries-query.dto';
+import { ScanRotatingQrDto } from './dto/scan-rotating-qr.dto';
 
 @ApiTags('time-entries')
 @Controller('time-entries')
@@ -27,6 +28,14 @@ export class TimeEntriesController {
     @Body() dto: CreateDeviceTimeEntryDto,
   ) {
     return this.timeEntriesService.createFromDevice(device, dto);
+  }
+
+  // Appelé par checkin-pos — QR rotatif (TOTP) affiché par le téléphone de
+  // l'employé, scanné par la tablette. Modèle "Basic-Fit", device authentifié.
+  @Post('scan-rotating-qr')
+  @UseGuards(DeviceAuthGuard)
+  scanRotatingQr(@CurrentDevice() device: AuthenticatedDevice, @Body() dto: ScanRotatingQrDto) {
+    return this.timeEntriesService.createFromRotatingQr(device, dto);
   }
 
   // Appelé par checkin-mobile — gps / qr_scan_own_phone, l'employé pointe pour lui-même.

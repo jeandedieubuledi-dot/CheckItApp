@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, Pressable, StyleSheet, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
 import { colors, spacing, radius, typography, nativeShadow } from '@horaires/ui-tokens';
 import type { Site, TimeEntry, TimeEntryType } from '@horaires/shared-types';
 import { apiClient } from '../services/AuthService';
 import { SitePicker } from '../components/SitePicker';
 import { ConfirmationBanner } from '../components/ConfirmationBanner';
+import { RotatingQrScreen } from './RotatingQrScreen';
 import { withPressedFeedback } from '../lib/pressedStyle';
 
 const ACTIONS: { type: TimeEntryType; label: string }[] = [
@@ -29,10 +29,9 @@ export function ClockInScreen() {
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [lastEntry, setLastEntry] = useState<TimeEntry | null>(null);
   const [selectedType, setSelectedType] = useState<TimeEntryType | null>(null);
-  const [isScanning, setIsScanning] = useState(false);
+  const [showRotatingQr, setShowRotatingQr] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [banner, setBanner] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
-  const [permission, requestPermission] = useCameraPermissions();
 
   const loadData = useCallback(async () => {
     try {
@@ -54,28 +53,22 @@ export function ClockInScreen() {
     }, [loadData]),
   );
 
-  const submit = async (via: 'gps' | 'qr', deviceId?: string) => {
-    if (!selectedType) return;
+  const submit = async () => {
+    if (!selectedType || !selectedSiteId) return;
     setIsSubmitting(true);
     setBanner(null);
     try {
-      let entry: TimeEntry;
-      if (via === 'qr' && deviceId) {
-        entry = await apiClient.clockInWithQrScan(deviceId, selectedType);
-      } else {
-        if (!selectedSiteId) throw new Error('Sélectionnez un site');
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
-          throw new Error('Autorisation de localisation refusée');
-        }
-        const position = await Location.getCurrentPositionAsync({});
-        entry = await apiClient.clockInWithGps(
-          selectedSiteId,
-          selectedType,
-          position.coords.latitude,
-          position.coords.longitude,
-        );
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        throw new Error('Autorisation de localisation refusée');
       }
+      const position = await Location.getCurrentPositionAsync({});
+      const entry: TimeEntry = await apiClient.clockInWithGps(
+        selectedSiteId,
+        selectedType,
+        position.coords.latitude,
+        position.coords.longitude,
+      );
       setBanner({ kind: 'success', message: `${TYPE_LABELS[entry.type]} enregistrée` });
       setLastEntry(entry);
       setSelectedType(null);
@@ -83,44 +76,19 @@ export function ClockInScreen() {
       setBanner({ kind: 'error', message: err instanceof Error ? err.message : 'Échec du pointage' });
     } finally {
       setIsSubmitting(false);
-      setIsScanning(false);
     }
   };
 
-  const handleBarcodeScanned = ({ data }: { data: string }) => {
-    if (isSubmitting) return;
-    try {
-      const parsed = JSON.parse(data);
-      if (!parsed.deviceId) throw new Error();
-      void submit('qr', parsed.deviceId);
-    } catch {
-      setBanner({ kind: 'error', message: 'QR non reconnu' });
-      setIsScanning(false);
-    }
-  };
-
-  if (isScanning) {
+  // Nouveau modèle (voir CLAUDE.md) : le téléphone affiche son propre QR
+  // rotatif, c'est la tablette du site qui le scanne — jamais l'inverse.
+  if (showRotatingQr) {
     return (
-      <View style={styles.container}>
-        <Text style={styles.title}>Scannez le QR du terminal</Text>
-        <View style={styles.cameraWrapper}>
-          {!permission?.granted ? (
-            <Pressable style={withPressedFeedback(styles.button)} onPress={requestPermission}>
-              <Text style={styles.buttonText}>Autoriser la caméra</Text>
-            </Pressable>
-          ) : (
-            <CameraView
-              style={styles.camera}
-              facing="back"
-              barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-              onBarcodeScanned={handleBarcodeScanned}
-            />
-          )}
-        </View>
-        <Pressable onPress={() => setIsScanning(false)}>
-          <Text style={styles.link}>Annuler</Text>
-        </Pressable>
-      </View>
+      <RotatingQrScreen
+        onClose={() => {
+          setShowRotatingQr(false);
+          void loadData();
+        }}
+      />
     );
   }
 
@@ -163,7 +131,7 @@ export function ClockInScreen() {
           <Pressable
             style={withPressedFeedback(styles.button, isSubmitting && styles.buttonDisabled)}
             disabled={isSubmitting}
-            onPress={() => submit('gps')}
+            onPress={() => submit()}
           >
             {isSubmitting ? (
               <ActivityIndicator color={colors.surface} />
@@ -171,11 +139,18 @@ export function ClockInScreen() {
               <Text style={styles.buttonText}>Confirmer via GPS</Text>
             )}
           </Pressable>
-          <Pressable style={withPressedFeedback(styles.secondaryButton)} onPress={() => setIsScanning(true)}>
-            <Text style={styles.secondaryButtonText}>Scanner le QR du terminal</Text>
-          </Pressable>
         </View>
       ) : null}
+
+      {/* Alternative au GPS : le type (arrivée/départ) n'a pas besoin d'être
+          choisi ci-dessus — la tablette qui scannera ce QR le déduit
+          elle-même du dernier pointage de l'employé sur ce site. */}
+      <Pressable
+        style={withPressedFeedback(styles.secondaryButton, styles.qrEntryButton)}
+        onPress={() => setShowRotatingQr(true)}
+      >
+        <Text style={styles.secondaryButtonText}>Pointer avec mon QR (tablette du site)</Text>
+      </Pressable>
     </View>
   );
 }
@@ -215,13 +190,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   secondaryButtonText: { color: colors.primary, fontWeight: '600' },
-  cameraWrapper: {
-    height: 320,
-    borderRadius: radius.lg,
-    overflow: 'hidden',
-    backgroundColor: '#000',
-    marginBottom: spacing.md,
-  },
-  camera: { flex: 1, width: '100%' },
-  link: { color: colors.primary, textAlign: 'center', fontSize: typography.sizes.sm },
+  qrEntryButton: { marginTop: spacing.lg },
 });

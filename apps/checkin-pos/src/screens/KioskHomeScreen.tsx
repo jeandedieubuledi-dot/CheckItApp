@@ -1,7 +1,6 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import QRCode from 'react-native-qrcode-svg';
 import { colors, spacing, radius, typography, nativeShadow } from '@horaires/ui-tokens';
 import type { DeviceTimeEntryResult } from '@horaires/shared-types';
 import { ApiError } from '@horaires/api-client';
@@ -18,9 +17,22 @@ type Feedback = { kind: 'clock'; type: 'clock_in' | 'clock_out'; name: string } 
 
 const FEEDBACK_DURATION_MS = 2500;
 
-// Écran d'accueil en boucle : QR pour le téléphone de l'employé
-// (qr_scan_own_phone), scan de badge en direct, et bouton PIN en secours.
-// Jamais d'état "connecté" persistant pour un employé en particulier.
+// Le QR rotatif du téléphone encode { userId, code } (voir RotatingQrScreen
+// côté checkin-mobile) — un badge physique scanné donne juste une chaîne
+// brute. Cette distinction décide quel endpoint appeler, sans jamais faire
+// confiance à son contenu : userId/code sont revérifiés côté serveur.
+function isRotatingQrPayload(data: string): boolean {
+  try {
+    const parsed = JSON.parse(data);
+    return typeof parsed?.userId === 'string' && typeof parsed?.code === 'string';
+  } catch {
+    return false;
+  }
+}
+
+// Écran d'accueil en boucle : scan (badge physique OU QR rotatif du
+// téléphone, qr_scan_own_phone) et bouton PIN en secours. Jamais d'état
+// "connecté" persistant pour un employé en particulier.
 export function KioskHomeScreen({ onNavigatePin, onNavigateEnrollBadge }: Props) {
   const { session } = useDeviceAuth();
   const [permission, requestPermission] = useCameraPermissions();
@@ -31,14 +43,16 @@ export function KioskHomeScreen({ onNavigatePin, onNavigateEnrollBadge }: Props)
     if (isProcessing.current) return;
     isProcessing.current = true;
     try {
-      const result: DeviceTimeEntryResult = await apiClient.clockInWithBadge(data);
+      const result: DeviceTimeEntryResult = isRotatingQrPayload(data)
+        ? await apiClient.scanRotatingQr(data)
+        : await apiClient.clockInWithBadge(data);
       setFeedback({
         kind: 'clock',
         type: result.type as 'clock_in' | 'clock_out',
         name: `${result.employee.firstName} ${result.employee.lastName}`,
       });
     } catch (err) {
-      setFeedback({ kind: 'error', message: err instanceof ApiError ? err.message : 'Badge non reconnu' });
+      setFeedback({ kind: 'error', message: err instanceof ApiError ? err.message : 'Code non reconnu' });
     } finally {
       setTimeout(() => {
         setFeedback(null);
@@ -55,14 +69,7 @@ export function KioskHomeScreen({ onNavigatePin, onNavigateEnrollBadge }: Props)
 
       <View style={styles.body}>
         <View style={styles.panel}>
-          <Text style={styles.panelTitle}>Scannez avec votre téléphone</Text>
-          {session ? (
-            <QRCode value={JSON.stringify({ deviceId: session.deviceId })} size={200} />
-          ) : null}
-        </View>
-
-        <View style={styles.panel}>
-          <Text style={styles.panelTitle}>Approchez votre badge</Text>
+          <Text style={styles.panelTitle}>Scannez votre badge ou le QR de votre téléphone</Text>
           <View style={styles.cameraWrapper}>
             {!permission?.granted ? (
               <Pressable style={withPressedFeedback(styles.button)} onPress={requestPermission}>

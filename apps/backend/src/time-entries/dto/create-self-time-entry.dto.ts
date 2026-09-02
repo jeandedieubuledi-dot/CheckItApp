@@ -2,8 +2,11 @@ import { TimeEntryType } from '@prisma/client';
 import { IsEnum, IsIn, IsLatitude, IsLongitude, IsUUID, ValidateIf } from 'class-validator';
 
 // Émis par checkin-mobile — l'employé pointe pour lui-même, authentifié par
-// son propre JWT utilisateur. 'qr_scan_own_phone' = son téléphone scanne le
-// QR affiché par le terminal du site ; 'gps' = auto-pointage géolocalisé.
+// son propre JWT utilisateur. 'gps' = auto-pointage géolocalisé.
+// 'qr_scan_own_phone' + deviceId = ancien modèle (le téléphone scannait le QR
+// du terminal) abandonné au profit du QR rotatif scanné par la tablette —
+// voir POST /time-entries/scan-rotating-qr. Chemin laissé en place côté
+// backend mais plus utilisé par checkin-mobile.
 export class CreateSelfTimeEntryDto {
   @IsEnum(TimeEntryType)
   type: TimeEntryType;

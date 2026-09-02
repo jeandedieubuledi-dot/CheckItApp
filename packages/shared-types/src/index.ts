@@ -117,3 +117,11 @@ export interface DeviceAuthResponse {
 export interface DeviceTimeEntryResult extends TimeEntry {
   employee: { firstName: string; lastName: string };
 }
+
+// ---- checkin-mobile : QR rotatif (TOTP) affiché par le téléphone de
+// l'employé et scanné par checkin-pos — voir RotatingQrService côté backend ----
+
+export interface RotatingQrCode {
+  payload: string; // à passer tel quel dans le QR ; encode { userId, code }
+  validUntil: string;
+}

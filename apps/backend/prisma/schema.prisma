@@ -102,6 +102,11 @@ model User {
   status       UserStatus @default(invited)
   pinCodeHash  String?    @map("pin_code_hash")
   badgeCode    String?    @unique @map("badge_code")
+  // Secret TOTP (RFC 6238) propre à cet utilisateur — sert à générer le QR
+  // rotatif affiché sur son téléphone. Généré une seule fois, à la première
+  // activation du pointage QR (voir RotatingQrService.generateCode). Jamais
+  // exposé au client : seul le code à 6 chiffres dérivé l'est.
+  qrSecret     String?    @map("qr_secret")
   createdAt    DateTime   @default(now()) @map("created_at")
 
   timeEntries         TimeEntry[]       @relation("UserTimeEntries")

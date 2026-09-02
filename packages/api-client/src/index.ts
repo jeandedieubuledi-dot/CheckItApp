@@ -3,6 +3,7 @@ import type {
   Availability,
   DeviceAuthResponse,
   DeviceTimeEntryResult,
+  RotatingQrCode,
   Shift,
   ShiftAssignment,
   ShiftOffer,
@@ -141,6 +142,15 @@ export class ApiClient {
     });
   }
 
+  // QR rotatif (TOTP) affiché par le téléphone de l'employé, scanné par la
+  // tablette — `payload` est la chaîne brute lue par la caméra, transmise
+  // telle quelle (décodée et vérifiée côté serveur).
+  scanRotatingQr(payload: string) {
+    return this.request<DeviceTimeEntryResult>('POST', '/time-entries/scan-rotating-qr', {
+      payload,
+    });
+  }
+
   // ---- Sites ----
   getSites() {
     return this.request<Site[]>('GET', '/sites');
@@ -185,12 +195,10 @@ export class ApiClient {
     });
   }
 
-  clockInWithQrScan(deviceId: string, type: string) {
-    return this.request<TimeEntry>('POST', '/time-entries/self', {
-      source: 'qr_scan_own_phone',
-      deviceId,
-      type,
-    });
+  // Génère le QR rotatif de l'employé connecté (nouveau modèle : c'est la
+  // tablette qui scanne, voir scanRotatingQr côté device).
+  getMyRotatingQr() {
+    return this.request<RotatingQrCode>('GET', '/users/me/rotating-qr');
   }
 
   getMyTimeEntries(params?: { userId?: string; from?: string; to?: string }) {

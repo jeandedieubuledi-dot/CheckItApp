@@ -2,6 +2,7 @@ import { Test } from '@nestjs/testing';
 import { NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
+import { RotatingQrService } from '../users/rotating-qr.service';
 import { TimeEntriesService } from './time-entries.service';
 
 describe('TimeEntriesService', () => {
@@ -13,6 +14,7 @@ describe('TimeEntriesService', () => {
     timeEntry: { create: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock; update: jest.Mock };
   };
   let usersService: { resolveByPin: jest.Mock };
+  let rotatingQrService: { decodePayload: jest.Mock; verifyCode: jest.Mock };
 
   beforeEach(async () => {
     prisma = {
@@ -27,12 +29,14 @@ describe('TimeEntriesService', () => {
       },
     };
     usersService = { resolveByPin: jest.fn() };
+    rotatingQrService = { decodePayload: jest.fn(), verifyCode: jest.fn() };
 
     const module = await Test.createTestingModule({
       providers: [
         TimeEntriesService,
         { provide: PrismaService, useValue: prisma },
         { provide: UsersService, useValue: usersService },
+        { provide: RotatingQrService, useValue: rotatingQrService },
       ],
     }).compile();
 
@@ -132,6 +136,58 @@ describe('TimeEntriesService', () => {
       expect(usersService.resolveByPin).toHaveBeenCalledWith('company-a', '4321');
       expect(prisma.timeEntry.create).toHaveBeenCalledWith({
         data: expect.objectContaining({ userId: 'user-1', source: 'pin_code' }),
+      });
+    });
+  });
+
+  describe('createFromRotatingQr', () => {
+    const device = { deviceId: 'device-1', siteId: 'site-a', companyId: 'company-a' };
+    const payload = JSON.stringify({ userId: 'user-1', code: '123456' });
+
+    it('rejects a userId scoped to another company, without ever checking the code', async () => {
+      rotatingQrService.decodePayload.mockReturnValue({ userId: 'user-of-company-b', code: '123456' });
+      prisma.user.findFirst.mockResolvedValue(null);
+
+      await expect(service.createFromRotatingQr(device, { payload })).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(prisma.user.findFirst).toHaveBeenCalledWith({
+        where: { id: 'user-of-company-b', companyId: 'company-a' },
+        select: { id: true, firstName: true, lastName: true },
+      });
+      expect(rotatingQrService.verifyCode).not.toHaveBeenCalled();
+      expect(prisma.timeEntry.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects an expired/invalid TOTP code without creating an entry', async () => {
+      rotatingQrService.decodePayload.mockReturnValue({ userId: 'user-1', code: '000000' });
+      prisma.user.findFirst.mockResolvedValue({ id: 'user-1', firstName: 'A', lastName: 'B' });
+      rotatingQrService.verifyCode.mockResolvedValue(false);
+
+      await expect(service.createFromRotatingQr(device, { payload })).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(prisma.timeEntry.create).not.toHaveBeenCalled();
+    });
+
+    it('creates a qr_scan_own_phone entry once the code is verified, auto-detecting the type', async () => {
+      rotatingQrService.decodePayload.mockReturnValue({ userId: 'user-1', code: '123456' });
+      prisma.user.findFirst.mockResolvedValue({ id: 'user-1', firstName: 'A', lastName: 'B' });
+      rotatingQrService.verifyCode.mockResolvedValue(true);
+      prisma.timeEntry.findFirst.mockResolvedValue(null);
+      prisma.timeEntry.create.mockResolvedValue({ id: 'entry-1' });
+
+      await service.createFromRotatingQr(device, { payload });
+
+      expect(rotatingQrService.verifyCode).toHaveBeenCalledWith('user-1', '123456');
+      expect(prisma.timeEntry.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          userId: 'user-1',
+          siteId: 'site-a',
+          deviceId: 'device-1',
+          type: 'clock_in',
+          source: 'qr_scan_own_phone',
+        }),
       });
     });
   });

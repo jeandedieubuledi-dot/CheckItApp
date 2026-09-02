@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/co
 import { TimeEntryType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
+import { RotatingQrService } from '../users/rotating-qr.service';
 import { AuthenticatedUser } from '../auth/current-user.decorator';
 import { AuthenticatedDevice } from '../site-devices/current-device.decorator';
 import { CreateDeviceTimeEntryDto } from './dto/create-device-time-entry.dto';
@@ -9,6 +10,7 @@ import { CreateSelfTimeEntryDto } from './dto/create-self-time-entry.dto';
 import { CreateManualTimeEntryDto } from './dto/create-manual-time-entry.dto';
 import { UpdateTimeEntryDto } from './dto/update-time-entry.dto';
 import { FindTimeEntriesQueryDto } from './dto/find-time-entries-query.dto';
+import { ScanRotatingQrDto } from './dto/scan-rotating-qr.dto';
 
 const PRESENCE_TYPES: TimeEntryType[] = ['clock_in', 'clock_out'];
 
@@ -17,6 +19,7 @@ export class TimeEntriesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
+    private readonly rotatingQrService: RotatingQrService,
   ) {}
 
   // Le kiosk n'a pas accès à /sites/:id/presence (réservé aux managers) pour
@@ -34,6 +37,47 @@ export class TimeEntriesService {
         type,
         timestamp: new Date(),
         source: dto.source,
+      },
+    });
+
+    return { ...entry, employee: { firstName: user.firstName, lastName: user.lastName } };
+  }
+
+  // Modèle "Basic-Fit" : le téléphone de l'employé génère un QR rotatif
+  // (TOTP), la tablette le scanne. Inverse de l'ancien modèle où c'était le
+  // téléphone qui scannait le QR fixe de la tablette (voir createSelf,
+  // source qr_scan_own_phone + deviceId — laissé en place mais plus utilisé
+  // par checkin-mobile depuis ce changement).
+  async createFromRotatingQr(device: AuthenticatedDevice, dto: ScanRotatingQrDto) {
+    const { userId, code } = this.rotatingQrService.decodePayload(dto.payload);
+
+    // RÈGLE CRITIQUE (voir CLAUDE.md) : le userId vient d'un payload scanné
+    // par un device, donc non fiable — on ne fait jamais confiance à un id
+    // brut sans le rescoper par companyId avant de vérifier/utiliser quoi
+    // que ce soit dessus.
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, companyId: device.companyId },
+      select: { id: true, firstName: true, lastName: true },
+    });
+    if (!user) {
+      throw new UnauthorizedException('Code QR invalide');
+    }
+
+    const isValid = await this.rotatingQrService.verifyCode(user.id, code);
+    if (!isValid) {
+      throw new UnauthorizedException('Code expiré ou invalide');
+    }
+
+    const type = await this.nextClockType(user.id, device.siteId);
+
+    const entry = await this.prisma.timeEntry.create({
+      data: {
+        userId: user.id,
+        siteId: device.siteId,
+        deviceId: device.deviceId,
+        type,
+        timestamp: new Date(),
+        source: 'qr_scan_own_phone',
       },
     });
 

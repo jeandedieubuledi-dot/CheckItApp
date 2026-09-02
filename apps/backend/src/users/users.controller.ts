@@ -6,6 +6,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../auth/current-user.decorator';
 import { UsersService } from './users.service';
+import { RotatingQrService } from './rotating-qr.service';
 import { InviteUserDto } from './dto/invite-user.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { SetPinDto } from './dto/set-pin.dto';
@@ -14,11 +15,23 @@ import { SetPinDto } from './dto/set-pin.dto';
 @Controller('users')
 @UseGuards(JwtAuthGuard, TenantScopeGuard)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly rotatingQrService: RotatingQrService,
+  ) {}
 
   @Get()
   findAll(@CurrentUser() user: AuthenticatedUser) {
     return this.usersService.findAll(user.companyId);
+  }
+
+  // Code QR rotatif personnel (TOTP, 30s) affiché par checkin-mobile —
+  // scanné par la tablette (checkin-pos) pour pointer. Deux segments donc
+  // aucun conflit avec @Get(':id') ci-dessous, quel que soit l'ordre.
+  @Get('me/rotating-qr')
+  async getMyRotatingQr(@CurrentUser() user: AuthenticatedUser) {
+    const { code, validUntil } = await this.rotatingQrService.generateCode(user.userId);
+    return { payload: JSON.stringify({ userId: user.userId, code }), validUntil };
   }
 
   @Get(':id')
