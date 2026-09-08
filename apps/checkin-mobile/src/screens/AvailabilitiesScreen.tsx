@@ -3,14 +3,16 @@ import { View, Text, TextInput, Pressable, FlatList, StyleSheet, RefreshControl 
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, spacing, radius, typography, nativeShadow } from '@horaires/ui-tokens';
 import type { Availability } from '@horaires/shared-types';
-import { apiClient } from '../services/AuthService';
+import { apiClient, useAuth } from '../services/AuthService';
 import { ConfirmationBanner } from '../components/ConfirmationBanner';
 import { withPressedFeedback } from '../lib/pressedStyle';
+import { fonts } from '../theme';
 
 const DAYS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export function AvailabilitiesScreen() {
+  const { user } = useAuth();
   const [availabilities, setAvailabilities] = useState<Availability[]>([]);
   const [dayOfWeek, setDayOfWeek] = useState<number>(0);
   const [startTime, setStartTime] = useState('09:00');
@@ -48,7 +50,7 @@ export function AvailabilitiesScreen() {
       setBanner({ kind: 'success', message: 'Disponibilité enregistrée' });
       await load();
     } catch (err) {
-      setBanner({ kind: 'error', message: err instanceof Error ? err.message : 'Échec de l\'enregistrement' });
+      setBanner({ kind: 'error', message: err instanceof Error ? err.message : "Échec de l'enregistrement" });
     } finally {
       setIsSubmitting(false);
     }
@@ -56,7 +58,15 @@ export function AvailabilitiesScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Mes disponibilités</Text>
+      <View style={styles.headerRow}>
+        <Text style={styles.title}>Disponibilités</Text>
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>
+            {`${user?.firstName?.[0] ?? ''}${user?.lastName?.[0] ?? ''}`.toUpperCase()}
+          </Text>
+        </View>
+      </View>
+      <Text style={styles.subtitle}>Déclarez un créneau où vous êtes disponible</Text>
 
       {banner ? <ConfirmationBanner kind={banner.kind} message={banner.message} /> : null}
 
@@ -80,7 +90,7 @@ export function AvailabilitiesScreen() {
             placeholder="09:00"
             placeholderTextColor={colors.textSecondary}
           />
-          <Text style={styles.arrow}>→</Text>
+          <Text style={styles.arrow}>–</Text>
           <TextInput
             style={styles.timeInput}
             value={endTime}
@@ -97,18 +107,28 @@ export function AvailabilitiesScreen() {
       <FlatList
         data={availabilities}
         keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.listContent}
         refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={refresh} />}
         ListEmptyComponent={<Text style={styles.empty}>Aucune disponibilité déclarée.</Text>}
         renderItem={({ item }) => (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>
-              {item.specificDate
-                ? new Date(item.specificDate).toLocaleDateString('fr-BE')
-                : DAYS[item.dayOfWeek ?? 0]}
-            </Text>
-            <Text style={styles.cardTime}>
-              {item.startTime} → {item.endTime} {item.isAvailable ? '' : '(indisponible)'}
-            </Text>
+            <View>
+              <Text style={styles.cardTitle}>
+                {item.specificDate ? new Date(item.specificDate).toLocaleDateString('fr-BE') : DAYS[item.dayOfWeek ?? 0]}
+              </Text>
+              <View style={styles.timePills}>
+                <View style={styles.timePill}>
+                  <Text style={styles.timePillText}>{item.startTime}</Text>
+                </View>
+                <Text style={styles.timeSep}>–</Text>
+                <View style={styles.timePill}>
+                  <Text style={styles.timePillText}>{item.endTime}</Text>
+                </View>
+              </View>
+            </View>
+            <View style={[styles.statusChip, item.isAvailable ? styles.statusChipOn : styles.statusChipOff]}>
+              <Text style={styles.statusChipText}>{item.isAvailable ? 'Disponible' : 'Indisponible'}</Text>
+            </View>
           </View>
         )}
       />
@@ -118,14 +138,26 @@ export function AvailabilitiesScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background, padding: spacing.lg },
-  title: { fontSize: typography.sizes.xl, fontWeight: '700', color: colors.textPrimary, marginBottom: spacing.md },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  title: { fontFamily: fonts.display, fontSize: typography.sizes.xl, color: colors.textPrimary },
+  subtitle: { fontSize: 13.5, color: colors.textSecondary, marginTop: 4, marginBottom: spacing.md },
+  avatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.primaryTint,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: colors.border,
+  },
+  avatarText: { fontFamily: fonts.displaySemiBold, fontSize: 14, color: colors.primary },
+
   form: {
     backgroundColor: colors.surface,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     padding: spacing.md,
     marginBottom: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
     ...nativeShadow.sm,
   },
   dayRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginBottom: spacing.md },
@@ -148,21 +180,31 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     textAlign: 'center',
+    fontFamily: fonts.displaySemiBold,
     color: colors.textPrimary,
   },
   arrow: { color: colors.textSecondary },
-  button: { backgroundColor: colors.primary, borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center' },
-  buttonText: { color: colors.surface, fontWeight: '600' },
+  button: { backgroundColor: colors.primary, borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center' },
+  buttonText: { color: colors.surface, fontWeight: '700' },
+
+  listContent: { paddingBottom: 110, gap: spacing.sm },
   empty: { color: colors.textSecondary, textAlign: 'center', marginTop: spacing.lg },
   card: {
     backgroundColor: colors.surface,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     padding: spacing.md,
-    marginBottom: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     ...nativeShadow.sm,
   },
-  cardTitle: { fontSize: typography.sizes.sm, fontWeight: '700', color: colors.textPrimary },
-  cardTime: { fontSize: typography.sizes.sm, color: colors.textSecondary, marginTop: 2 },
+  cardTitle: { fontFamily: fonts.displaySemiBold, fontSize: 14.5, color: colors.textPrimary, marginBottom: 8 },
+  timePills: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  timePill: { paddingHorizontal: 11, paddingVertical: 7, borderRadius: radius.sm + 4, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border },
+  timePillText: { fontFamily: fonts.displaySemiBold, fontSize: 12.5, color: colors.textPrimary },
+  timeSep: { color: colors.textSecondary, fontSize: 12 },
+  statusChip: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.full },
+  statusChipOn: { backgroundColor: colors.successTint },
+  statusChipOff: { backgroundColor: colors.border },
+  statusChipText: { fontSize: 11.5, fontWeight: '700', color: colors.textPrimary },
 });

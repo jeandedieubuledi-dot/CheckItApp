@@ -13,7 +13,7 @@ export function ConfirmationBanner({ kind, message }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: { borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.md },
+  container: { borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.md },
   success: { backgroundColor: colors.success },
   error: { backgroundColor: colors.danger },
   text: { color: colors.surface, fontWeight: '600', fontSize: typography.sizes.md, textAlign: 'center' },
