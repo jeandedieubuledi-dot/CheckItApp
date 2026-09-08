@@ -4,9 +4,11 @@ import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Ionicons } from '@expo/vector-icons';
+import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from '@expo-google-fonts/inter';
+import { Sora_600SemiBold, Sora_700Bold } from '@expo-google-fonts/sora';
 import { colors } from '@horaires/ui-tokens';
 import { AuthProvider, useAuth } from './src/services/AuthService';
+import { FloatingTabBar } from './src/components/FloatingTabBar';
 
 // Écrans partagés (staff + manager)
 import { LoginScreen } from './src/screens/LoginScreen';
@@ -22,15 +24,6 @@ import { ShiftApprovalScreen } from './src/screens/ShiftApprovalScreen';
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
-const TAB_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
-  ClockIn: 'time-outline',
-  Planning: 'calendar-outline',
-  ShiftMarketplace: 'swap-horizontal-outline',
-  Availabilities: 'checkmark-circle-outline',
-  PresenceLive: 'people-outline',
-  ShiftApproval: 'shield-checkmark-outline',
-};
-
 /**
  * Point d'entrée. UNE SEULE app pour staff et managers — la navigation
  * s'adapte selon `currentUser.role`. Ne JAMAIS ajouter d'écran de création
@@ -38,6 +31,23 @@ const TAB_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
  * (voir CLAUDE.md, décision d'architecture).
  */
 export default function App() {
+  const [fontsLoaded] = useFonts({
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+    Sora_600SemiBold,
+    Sora_700Bold,
+  });
+
+  if (!fontsLoaded) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
   return (
     <AuthProvider>
       <NavigationContainer>
@@ -53,8 +63,8 @@ function RootNavigator() {
 
   if (isLoading) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" />
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }}>
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
@@ -76,13 +86,8 @@ function MainTabs() {
 
   return (
     <Tab.Navigator
-      screenOptions={({ route }) => ({
-        tabBarIcon: ({ color, size }) => (
-          <Ionicons name={TAB_ICONS[route.name] ?? 'ellipse-outline'} size={size} color={color} />
-        ),
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textSecondary,
-      })}
+      tabBar={(props) => <FloatingTabBar {...props} />}
+      screenOptions={{ headerShown: false }}
     >
       {/* Écrans communs à tous les rôles */}
       <Tab.Screen name="ClockIn" component={ClockInScreen} options={{ title: 'Pointage' }} />

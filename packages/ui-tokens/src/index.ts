@@ -2,35 +2,40 @@
 // pour garder une cohérence visuelle malgré des stacks UI différentes
 // (React Native vs React web).
 
-// Palette indigo/violet — plus de caractère qu'un bleu générique, cohérente
-// avec les tons "slate" pour le texte/fond (référence Tailwind/shadcn).
+// Palette bleue sobre — ton rassurant/professionnel adapté à un outil légal
+// de pointage, pas une identité "startup". `accent` est un unique accent
+// secondaire (teal) réservé à des touches de profondeur très ponctuelles
+// (ex: glow derrière le QR de pointage) — ne remplace jamais `primary`.
 export const colors = {
-  primary: '#4F46E5',
-  primaryDark: '#4338CA',
-  primaryTint: '#EEF2FF', // fond léger pour zones actives/survolées (drop targets, sélection)
-  accent: '#9333EA', // second point du dégradé (voir gradients ci-dessous)
+  primary: '#2563EB',
+  primaryDark: '#1D4ED8',
+  primaryTint: '#EFF6FF',
+  accent: '#0D9488',
+  accentTint: '#F0FDFA',
   success: '#16A34A',
+  successTint: '#F0FDF4',
   warning: '#F59E0B',
+  warningTint: '#FFFBEB',
   danger: '#DC2626',
-  background: '#F8FAFC',
+  background: '#F9FAFB',
   surface: '#FFFFFF',
-  textPrimary: '#0F172A',
-  textSecondary: '#64748B',
-  border: '#E2E8F0',
+  textPrimary: '#111827',
+  textSecondary: '#6B7280',
+  border: '#E5E7EB',
 };
 
 // Format CSS (web uniquement) — dégradé de marque, utilisé avec parcimonie
 // (logo, CTA principal, accents) pour ne pas surcharger l'interface.
 export const gradients = {
-  brand: 'linear-gradient(135deg, #4F46E5 0%, #9333EA 100%)',
-  brandHover: 'linear-gradient(135deg, #4338CA 0%, #7E22CE 100%)',
+  brand: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)',
+  brandHover: 'linear-gradient(135deg, #1D4ED8 0%, #1E40AF 100%)',
 };
 
 // Format CSS (web uniquement — React Native ignore ces propriétés).
 export const shadows = {
-  sm: '0 1px 2px rgba(16, 24, 40, 0.06)',
-  md: '0 4px 12px rgba(16, 24, 40, 0.08)',
-  lg: '0 16px 32px rgba(16, 24, 40, 0.14)',
+  sm: '0 1px 2px rgba(17, 24, 39, 0.06)',
+  md: '0 4px 12px rgba(17, 24, 39, 0.08)',
+  lg: '0 16px 32px rgba(17, 24, 39, 0.14)',
 };
 
 // Équivalent React Native (checkin-mobile, checkin-pos) — shadowColor/Offset/
@@ -38,21 +43,21 @@ export const shadows = {
 // directement spreadable dans un style RN.
 export const nativeShadow = {
   sm: {
-    shadowColor: '#101828',
+    shadowColor: '#111827',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.06,
     shadowRadius: 2,
     elevation: 1,
   },
   md: {
-    shadowColor: '#101828',
+    shadowColor: '#111827',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.08,
     shadowRadius: 8,
     elevation: 3,
   },
   lg: {
-    shadowColor: '#101828',
+    shadowColor: '#111827',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.16,
     shadowRadius: 16,
@@ -72,6 +77,7 @@ export const radius = {
   sm: 6,
   md: 10,
   lg: 16,
+  xl: 22,
   full: 9999,
 };
 

@@ -17,7 +17,7 @@ type Feedback = { kind: 'clock'; type: 'clock_in' | 'clock_out'; name: string } 
 
 const FEEDBACK_DURATION_MS = 2500;
 
-// Le QR rotatif du téléphone encode { userId, code } (voir RotatingQrScreen
+// Le QR rotatif du téléphone encode { userId, code } (voir PersonalQrCode
 // côté checkin-mobile) — un badge physique scanné donne juste une chaîne
 // brute. Cette distinction décide quel endpoint appeler, sans jamais faire
 // confiance à son contenu : userId/code sont revérifiés côté serveur.

@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { CalendarDays, Radio, ArrowLeftRight, Users, LogOut, CalendarClock } from 'lucide-react';
-import { colors, spacing, radius, typography, shadows } from '@horaires/ui-tokens';
+import { colors, gradients, spacing, radius, typography, shadows } from '@horaires/ui-tokens';
 import { useAuth } from '../services/AuthService';
 
 const NAV_ITEMS = [
@@ -74,7 +74,7 @@ const styles: Record<string, React.CSSProperties> = {
     width: 30,
     height: 30,
     borderRadius: radius.md,
-    background: 'linear-gradient(135deg, #4F46E5 0%, #9333EA 100%)',
+    background: gradients.brand,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',

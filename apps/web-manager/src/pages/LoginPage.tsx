@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { CalendarClock } from 'lucide-react';
-import { colors, spacing, radius, typography, shadows } from '@horaires/ui-tokens';
+import { colors, gradients, spacing, radius, typography, shadows } from '@horaires/ui-tokens';
 import { useAuth } from '../services/AuthService';
 
 export function LoginPage() {
@@ -85,7 +85,7 @@ const styles: Record<string, React.CSSProperties> = {
     width: 52,
     height: 52,
     borderRadius: radius.lg,
-    background: 'linear-gradient(135deg, #4F46E5 0%, #9333EA 100%)',
+    background: gradients.brand,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
