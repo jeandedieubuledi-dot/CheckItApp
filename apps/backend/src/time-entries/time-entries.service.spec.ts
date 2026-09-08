@@ -348,16 +348,17 @@ describe('TimeEntriesService', () => {
       );
     });
 
-    it('returns only users whose latest clock event is clock_in', async () => {
+    it('returns only users whose latest clock event is clock_in, with the since timestamp of that event', async () => {
+      const lastClockIn = new Date('2026-09-01T13:00:00.000Z');
       prisma.site.findFirst.mockResolvedValue({ id: 'site-a', companyId: 'company-a' });
       prisma.timeEntry.findMany.mockResolvedValue([
-        { userId: 'user-1', type: 'clock_in' },
-        { userId: 'user-2', type: 'clock_in' },
-        { userId: 'user-2', type: 'clock_out' },
-        { userId: 'user-1', type: 'clock_out' },
-        { userId: 'user-1', type: 'clock_in' },
+        { userId: 'user-1', type: 'clock_in', timestamp: new Date('2026-09-01T09:00:00.000Z') },
+        { userId: 'user-2', type: 'clock_in', timestamp: new Date('2026-09-01T09:00:00.000Z') },
+        { userId: 'user-2', type: 'clock_out', timestamp: new Date('2026-09-01T12:00:00.000Z') },
+        { userId: 'user-1', type: 'clock_out', timestamp: new Date('2026-09-01T12:30:00.000Z') },
+        { userId: 'user-1', type: 'clock_in', timestamp: lastClockIn },
       ]);
-      prisma.user.findMany.mockResolvedValue([{ id: 'user-1' }]);
+      prisma.user.findMany.mockResolvedValue([{ id: 'user-1', firstName: 'A', lastName: 'B' }]);
 
       const result = await service.getPresence('company-a', 'site-a');
 
@@ -365,7 +366,7 @@ describe('TimeEntriesService', () => {
         where: { id: { in: ['user-1'] } },
         select: { id: true, firstName: true, lastName: true },
       });
-      expect(result).toEqual([{ id: 'user-1' }]);
+      expect(result).toEqual([{ id: 'user-1', firstName: 'A', lastName: 'B', since: lastClockIn }]);
     });
 
     it('returns an empty list without querying users when nobody is clocked in', async () => {

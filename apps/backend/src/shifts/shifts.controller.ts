@@ -76,4 +76,11 @@ export class ShiftsController {
   approveOffer(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.shiftsService.approveOffer(user.companyId, id);
   }
+
+  @Post('shift-offers/:id/reject')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'manager')
+  rejectOffer(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.shiftsService.rejectOffer(user.companyId, id);
+  }
 }

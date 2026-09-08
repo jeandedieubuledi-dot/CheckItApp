@@ -233,6 +233,30 @@ export class ShiftsService {
     return updatedOffer;
   }
 
+  // Le manager refuse l'échange : l'offre passe en 'rejected' (état
+  // terminal) et l'assignation revient au propriétaire d'origine — s'il
+  // veut retenter, il doit reproposer explicitement via offerAssignment.
+  async rejectOffer(companyId: string, offerId: string) {
+    const offer = await this.findOwnedOffer(companyId, offerId);
+
+    if (!offer.requiresManagerApproval || offer.status !== 'accepted' || !offer.acceptedBy) {
+      throw new BadRequestException("Cette offre n'attend pas de validation manager");
+    }
+
+    const [, updatedOffer] = await this.prisma.$transaction([
+      this.prisma.shiftAssignment.update({
+        where: { id: offer.shiftAssignmentId },
+        data: { status: 'assigned' },
+      }),
+      this.prisma.shiftOffer.update({
+        where: { id: offerId },
+        data: { status: 'rejected', resolvedAt: new Date() },
+      }),
+    ]);
+
+    return updatedOffer;
+  }
+
   private async findOwnedAssignment(companyId: string, id: string) {
     const assignment = await this.prisma.shiftAssignment.findFirst({
       where: { id, shift: { site: { companyId } } },

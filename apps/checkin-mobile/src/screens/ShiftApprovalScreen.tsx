@@ -19,8 +19,8 @@ function initials(name: string) {
 }
 
 // Un collègue a accepté une offre d'échange (status 'accepted') et
-// requiresManagerApproval est vrai — le manager valide. Pas de "refuser" :
-// l'API n'expose pas ce endpoint aujourd'hui (voir packages/api-client).
+// requiresManagerApproval est vrai — le manager valide ou refuse. Un refus
+// remet l'assignation à son propriétaire d'origine (voir ShiftsService.rejectOffer).
 export function ShiftApprovalScreen() {
   const { user } = useAuth();
   const [pending, setPending] = useState<PendingOffer[]>([]);
@@ -67,6 +67,16 @@ export function ShiftApprovalScreen() {
     setBusyId(offerId);
     try {
       await apiClient.approveShiftOffer(offerId);
+      await load();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const reject = async (offerId: string) => {
+    setBusyId(offerId);
+    try {
+      await apiClient.rejectShiftOffer(offerId);
       await load();
     } finally {
       setBusyId(null);
@@ -138,16 +148,22 @@ export function ShiftApprovalScreen() {
                 </Text>
               </View>
 
-              <Pressable style={styles.approveBtn} disabled={busy} onPress={() => approve(item.id)}>
-                {busy ? (
-                  <ActivityIndicator color={colors.surface} size="small" />
-                ) : (
-                  <>
-                    <Ionicons name="checkmark" size={16} color={colors.surface} />
-                    <Text style={styles.approveBtnText}>Approuver</Text>
-                  </>
-                )}
-              </Pressable>
+              <View style={styles.actionsRow}>
+                <Pressable style={styles.rejectBtn} disabled={busy} onPress={() => reject(item.id)}>
+                  <Ionicons name="close" size={16} color={colors.textPrimary} />
+                  <Text style={styles.rejectBtnText}>Refuser</Text>
+                </Pressable>
+                <Pressable style={styles.approveBtn} disabled={busy} onPress={() => approve(item.id)}>
+                  {busy ? (
+                    <ActivityIndicator color={colors.surface} size="small" />
+                  ) : (
+                    <>
+                      <Ionicons name="checkmark" size={16} color={colors.surface} />
+                      <Text style={styles.approveBtnText}>Approuver</Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
             </View>
           );
         }}
@@ -203,7 +219,9 @@ const styles = StyleSheet.create({
   detailsSite: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
   detailsDate: { fontSize: 11.5, fontWeight: '700', color: colors.textSecondary, textTransform: 'capitalize' },
 
+  actionsRow: { flexDirection: 'row', gap: 10 },
   approveBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -213,4 +231,17 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   approveBtnText: { color: colors.surface, fontWeight: '700', fontSize: 13.5 },
+  rejectBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: colors.surface,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingVertical: 12,
+  },
+  rejectBtnText: { color: colors.textPrimary, fontWeight: '700', fontSize: 13.5 },
 });

@@ -531,4 +531,60 @@ describe('ShiftsService', () => {
       );
     });
   });
+
+  describe('rejectOffer', () => {
+    const shiftAssignment1 = {
+      shiftId: 'shift-1',
+      shift: {
+        startsAt: new Date('2026-09-01T08:00:00.000Z'),
+        endsAt: new Date('2026-09-01T16:00:00.000Z'),
+      },
+    };
+
+    it('refuses to reject an offer not awaiting manager approval', async () => {
+      prisma.shiftOffer.findFirst.mockResolvedValue({
+        id: 'offer-1',
+        status: 'open',
+        requiresManagerApproval: true,
+        acceptedBy: null,
+        shiftAssignmentId: 'assignment-1',
+        shiftAssignment: shiftAssignment1,
+      });
+
+      await expect(service.rejectOffer('company-a', 'offer-1')).rejects.toThrow(BadRequestException);
+      expect(prisma.shiftAssignment.update).not.toHaveBeenCalled();
+    });
+
+    it('reverts the assignment to the original owner and marks the offer rejected', async () => {
+      prisma.shiftOffer.findFirst.mockResolvedValue({
+        id: 'offer-1',
+        status: 'accepted',
+        requiresManagerApproval: true,
+        acceptedBy: 'user-2',
+        shiftAssignmentId: 'assignment-1',
+        shiftAssignment: shiftAssignment1,
+      });
+      prisma.shiftAssignment.update.mockResolvedValue({ id: 'assignment-1', status: 'assigned' });
+      prisma.shiftOffer.update.mockResolvedValue({ id: 'offer-1', status: 'rejected' });
+
+      await service.rejectOffer('company-a', 'offer-1');
+
+      expect(prisma.shiftAssignment.update).toHaveBeenCalledWith({
+        where: { id: 'assignment-1' },
+        data: { status: 'assigned' },
+      });
+      expect(prisma.shiftOffer.update).toHaveBeenCalledWith({
+        where: { id: 'offer-1' },
+        data: { status: 'rejected', resolvedAt: expect.any(Date) },
+      });
+    });
+
+    it('blocks rejecting an offer from another company', async () => {
+      prisma.shiftOffer.findFirst.mockResolvedValue(null);
+
+      await expect(service.rejectOffer('company-a', 'offer-of-company-b')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
 });

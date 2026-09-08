@@ -178,7 +178,7 @@ export class ApiClient {
   }
 
   getPresence(siteId: string) {
-    return this.request<{ id: string; firstName: string; lastName: string }[]>(
+    return this.request<{ id: string; firstName: string; lastName: string; since: string }[]>(
       'GET',
       `/sites/${siteId}/presence`,
     );
@@ -255,6 +255,10 @@ export class ApiClient {
     return this.request<ShiftAssignment>('POST', `/shift-offers/${offerId}/approve`);
   }
 
+  rejectShiftOffer(offerId: string) {
+    return this.request<ShiftAssignment>('POST', `/shift-offers/${offerId}/reject`);
+  }
+
   // ---- Disponibilités ----
   getAvailabilities(userId?: string) {
     return this.request<Availability[]>('GET', `/availabilities${toQueryString({ userId })}`);
@@ -268,5 +272,22 @@ export class ApiClient {
     isAvailable?: boolean;
   }) {
     return this.request<Availability>('POST', '/availabilities', payload);
+  }
+
+  updateAvailability(
+    id: string,
+    payload: Partial<{
+      dayOfWeek: number;
+      specificDate: string;
+      startTime: string;
+      endTime: string;
+      isAvailable: boolean;
+    }>,
+  ) {
+    return this.request<Availability>('PATCH', `/availabilities/${id}`, payload);
+  }
+
+  deleteAvailability(id: string) {
+    return this.request<void>('DELETE', `/availabilities/${id}`);
   }
 }

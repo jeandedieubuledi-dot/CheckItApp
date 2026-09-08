@@ -7,10 +7,23 @@ import { apiClient, useAuth } from '../services/AuthService';
 import { SitePicker } from '../components/SitePicker';
 import { fonts } from '../theme';
 
-type PresentEmployee = { id: string; firstName: string; lastName: string };
+type PresentEmployee = { id: string; firstName: string; lastName: string; since: string };
 
 function initials(firstName: string, lastName: string) {
   return `${firstName[0] ?? ''}${lastName[0] ?? ''}`.toUpperCase();
+}
+
+function sinceLabel(since: string) {
+  return new Date(since).toLocaleTimeString('fr-BE', { hour: '2-digit', minute: '2-digit' });
+}
+
+// Calculée à chaque affichage/rafraîchissement (pas de minuteur live) — le
+// pull-to-refresh existant suffit, pas besoin d'un chrono qui tourne.
+function durationLabel(since: string) {
+  const minutes = Math.max(0, Math.round((Date.now() - new Date(since).getTime()) / 60000));
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return h > 0 ? `${h}h${String(m).padStart(2, '0')}` : `${m}min`;
 }
 
 export function PresenceLiveScreen() {
@@ -94,12 +107,15 @@ export function PresenceLiveScreen() {
             <View style={styles.cardAvatar}>
               <Text style={styles.cardAvatarText}>{initials(item.firstName, item.lastName)}</Text>
             </View>
-            <Text style={styles.name}>
-              {item.firstName} {item.lastName}
-            </Text>
-            <View style={styles.presentTag}>
-              <View style={styles.presentDot} />
-              <Text style={styles.presentTagText}>En service</Text>
+            <View style={styles.nameGroup}>
+              <Text style={styles.name}>
+                {item.firstName} {item.lastName}
+              </Text>
+              <Text style={styles.since}>Depuis {sinceLabel(item.since)}</Text>
+            </View>
+            <View style={styles.durationGroup}>
+              <Text style={styles.durationValue}>{durationLabel(item.since)}</Text>
+              <Text style={styles.durationLabel}>en service</Text>
             </View>
           </View>
         )}
@@ -162,8 +178,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   cardAvatarText: { fontFamily: fonts.displaySemiBold, fontSize: 14, color: colors.primary },
-  name: { flex: 1, fontSize: typography.sizes.md, color: colors.textPrimary, fontWeight: '700' },
-  presentTag: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  presentDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.success },
-  presentTagText: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
+  nameGroup: { flex: 1 },
+  name: { fontSize: typography.sizes.md, color: colors.textPrimary, fontWeight: '700' },
+  since: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+  durationGroup: { alignItems: 'flex-end' },
+  durationValue: { fontFamily: fonts.displaySemiBold, fontSize: 14, color: colors.success },
+  durationLabel: { fontSize: 10.5, color: colors.textSecondary },
 });

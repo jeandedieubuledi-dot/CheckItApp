@@ -196,26 +196,29 @@ export class TimeEntriesService {
     const entries = await this.prisma.timeEntry.findMany({
       where: { siteId, type: { in: PRESENCE_TYPES } },
       orderBy: { timestamp: 'asc' },
-      select: { userId: true, type: true },
+      select: { userId: true, type: true, timestamp: true },
     });
 
-    const lastStateByUser = new Map<string, TimeEntryType>();
+    // On garde le dernier pointage de chaque employé — s'il s'agit d'un
+    // clock_in, l'employé est présent depuis ce timestamp précis (sert à
+    // afficher "depuis 09:00" côté client sans recalcul serveur).
+    const lastEntryByUser = new Map<string, { type: TimeEntryType; since: Date }>();
     for (const entry of entries) {
-      lastStateByUser.set(entry.userId, entry.type);
+      lastEntryByUser.set(entry.userId, { type: entry.type, since: entry.timestamp });
     }
 
-    const presentUserIds = [...lastStateByUser.entries()]
-      .filter(([, type]) => type === 'clock_in')
-      .map(([userId]) => userId);
-
-    if (presentUserIds.length === 0) {
+    const present = [...lastEntryByUser.entries()].filter(([, e]) => e.type === 'clock_in');
+    if (present.length === 0) {
       return [];
     }
 
-    return this.prisma.user.findMany({
-      where: { id: { in: presentUserIds } },
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: present.map(([userId]) => userId) } },
       select: { id: true, firstName: true, lastName: true },
     });
+    const sinceByUser = new Map(present.map(([userId, e]) => [userId, e.since]));
+
+    return users.map((u) => ({ ...u, since: sinceByUser.get(u.id)! }));
   }
 
   private async resolveDeviceUser(device: AuthenticatedDevice, dto: CreateDeviceTimeEntryDto) {
