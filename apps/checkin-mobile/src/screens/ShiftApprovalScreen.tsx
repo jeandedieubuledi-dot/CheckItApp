@@ -2,7 +2,7 @@ import React, { useCallback, useState } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet, RefreshControl, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, radius, typography, nativeShadow } from '@horaires/ui-tokens';
+import { colors, spacing, radius } from '@horaires/ui-tokens';
 import type { Shift, ShiftAssignment, ShiftOffer, Site, User } from '@horaires/shared-types';
 import { apiClient, useAuth } from '../services/AuthService';
 import { fonts } from '../theme';
@@ -173,10 +173,10 @@ export function ShiftApprovalScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background, padding: spacing.lg },
+  container: { flex: 1, backgroundColor: colors.background, paddingTop: 28, paddingHorizontal: 24 },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   titleGroup: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  title: { fontFamily: fonts.display, fontSize: 22, color: colors.textPrimary },
+  title: { fontFamily: fonts.display, fontSize: 22, color: colors.textPrimary, letterSpacing: -0.2 },
   countChip: { backgroundColor: colors.warningTint, paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.full },
   countChipText: { fontSize: 12, fontWeight: '800', color: colors.textPrimary },
   avatar: {
@@ -190,32 +190,44 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   avatarText: { fontFamily: fonts.displaySemiBold, fontSize: 14, color: colors.primary },
-  subtitle: { fontSize: 13.5, color: colors.textSecondary, marginTop: 4 },
+  subtitle: { fontSize: 13.5, color: colors.textSecondary, marginTop: 6 },
 
-  listContent: { paddingTop: spacing.lg, paddingBottom: 110, gap: spacing.md },
+  listContent: { paddingTop: 22, paddingBottom: 110, gap: 12 },
   empty: { color: colors.textSecondary, textAlign: 'center', marginTop: spacing.lg },
   card: {
     backgroundColor: colors.surface,
-    borderRadius: radius.xl,
+    borderRadius: 20,
     padding: spacing.md,
-    gap: spacing.sm,
-    ...nativeShadow.sm,
+    gap: 12,
+    shadowColor: '#111827',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 3,
   },
   swapRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   swapAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     backgroundColor: colors.primaryTint,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  swapAvatarText: { fontFamily: fonts.displaySemiBold, fontSize: 11.5, color: colors.primary },
+  swapAvatarText: { fontFamily: fonts.displaySemiBold, fontSize: 12, color: colors.primary },
   swapNames: { flex: 1, fontSize: 13, color: colors.textPrimary },
   swapNamesBold: { fontWeight: '700' },
 
-  details: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.background, borderRadius: radius.md, padding: 11 },
-  detailsTime: { fontFamily: fonts.displaySemiBold, fontSize: 15, color: colors.textPrimary },
+  details: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.background,
+    borderRadius: 14,
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+  },
+  detailsTime: { fontFamily: fonts.displaySemiBold, fontSize: 15.5, color: colors.textPrimary },
   detailsSite: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
   detailsDate: { fontSize: 11.5, fontWeight: '700', color: colors.textSecondary, textTransform: 'capitalize' },
 
@@ -227,8 +239,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 6,
     backgroundColor: colors.primary,
-    borderRadius: radius.md,
-    paddingVertical: 12,
+    borderRadius: 13,
+    paddingVertical: 11,
   },
   approveBtnText: { color: colors.surface, fontWeight: '700', fontSize: 13.5 },
   rejectBtn: {
@@ -240,8 +252,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderWidth: 1.5,
     borderColor: colors.border,
-    borderRadius: radius.md,
-    paddingVertical: 12,
+    borderRadius: 13,
+    paddingVertical: 11,
   },
   rejectBtnText: { color: colors.textPrimary, fontWeight: '700', fontSize: 13.5 },
 });

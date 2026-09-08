@@ -1,10 +1,10 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, FlatList, StyleSheet, RefreshControl, ScrollView } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, RefreshControl, ScrollView } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { colors, spacing, radius, typography, nativeShadow } from '@horaires/ui-tokens';
+import { Ionicons } from '@expo/vector-icons';
+import { colors, spacing, typography } from '@horaires/ui-tokens';
 import type { Site } from '@horaires/shared-types';
 import { apiClient, useAuth } from '../services/AuthService';
-import { SitePicker } from '../components/SitePicker';
 import { fonts } from '../theme';
 
 type PresentEmployee = { id: string; firstName: string; lastName: string; since: string };
@@ -63,6 +63,13 @@ export function PresenceLiveScreen() {
     setIsRefreshing(false);
   };
 
+  const selectedSite = sites.find((s) => s.id === selectedSiteId);
+  const cycleSite = () => {
+    if (sites.length < 2) return;
+    const i = sites.findIndex((s) => s.id === selectedSiteId);
+    setSelectedSiteId(sites[(i + 1) % sites.length].id);
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
@@ -80,7 +87,13 @@ export function PresenceLiveScreen() {
         </View>
       </View>
 
-      <SitePicker sites={sites} selectedSiteId={selectedSiteId} onSelect={setSelectedSiteId} />
+      {selectedSite ? (
+        <Pressable style={styles.sitePill} onPress={cycleSite} disabled={sites.length < 2}>
+          <Ionicons name="location-outline" size={13} color={colors.textPrimary} />
+          <Text style={styles.sitePillText}>{selectedSite.name}</Text>
+          {sites.length > 1 ? <Ionicons name="chevron-down" size={13} color={colors.textPrimary} /> : null}
+        </Pressable>
+      ) : null}
 
       <Text style={styles.count}>
         {present.length} employé{present.length > 1 ? 's' : ''} présent{present.length > 1 ? 's' : ''}
@@ -125,11 +138,20 @@ export function PresenceLiveScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background, padding: spacing.lg },
+  container: { flex: 1, backgroundColor: colors.background, paddingTop: 28, paddingHorizontal: 24 },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   titleGroup: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  title: { fontFamily: fonts.display, fontSize: 22, color: colors.textPrimary },
-  livePill: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.successTint, paddingVertical: 5, paddingHorizontal: 10 },
+  title: { fontFamily: fonts.display, fontSize: 24, color: colors.textPrimary, letterSpacing: -0.2 },
+  livePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.successTint,
+    paddingVertical: 5,
+    paddingLeft: 8,
+    paddingRight: 10,
+    borderRadius: 999,
+  },
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.success },
   liveText: { fontSize: 11, fontWeight: '700', color: colors.textPrimary },
   avatar: {
@@ -144,7 +166,22 @@ const styles = StyleSheet.create({
   },
   avatarText: { fontFamily: fonts.displaySemiBold, fontSize: 14, color: colors.primary },
 
-  count: { fontSize: 13, fontWeight: '700', color: colors.textSecondary, marginTop: spacing.md },
+  sitePill: {
+    marginTop: 16,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+  },
+  sitePillText: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
+
+  count: { fontSize: 13, fontWeight: '700', color: colors.textSecondary, marginTop: 22 },
   stripContent: { gap: 10, paddingVertical: 12 },
   stripAvatar: {
     width: 48,
@@ -158,16 +195,21 @@ const styles = StyleSheet.create({
   },
   stripAvatarText: { fontFamily: fonts.displaySemiBold, fontSize: 15, color: colors.primary },
 
-  listContent: { paddingTop: spacing.sm, paddingBottom: 110, gap: spacing.sm },
+  listContent: { paddingTop: 26, paddingBottom: 110, gap: 10 },
   empty: { color: colors.textSecondary, textAlign: 'center', marginTop: spacing.lg },
   card: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
+    gap: 12,
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    ...nativeShadow.sm,
+    borderRadius: 18,
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    shadowColor: '#111827',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   cardAvatar: {
     width: 42,

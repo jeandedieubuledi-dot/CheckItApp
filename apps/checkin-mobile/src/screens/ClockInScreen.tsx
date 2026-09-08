@@ -192,7 +192,7 @@ export function ClockInScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  content: { padding: spacing.lg, paddingBottom: spacing.xl },
+  content: { paddingTop: 28, paddingHorizontal: 24, paddingBottom: spacing.xl },
 
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -217,16 +217,18 @@ const styles = StyleSheet.create({
   },
   avatarText: { fontFamily: fonts.displaySemiBold, fontSize: 14, color: colors.primary },
 
-  greeting: { fontFamily: fonts.display, fontSize: typography.sizes.xl, color: colors.textPrimary, marginTop: spacing.lg },
+  greeting: { fontFamily: fonts.display, fontSize: 23, color: colors.textPrimary, marginTop: 22, letterSpacing: -0.2 },
 
   statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
     alignSelf: 'flex-start',
-    marginTop: spacing.sm,
-    paddingVertical: 7,
-    paddingHorizontal: 12,
+    marginTop: 10,
+    paddingTop: 7,
+    paddingBottom: 7,
+    paddingLeft: 10,
+    paddingRight: 12,
     borderRadius: radius.full,
   },
   statusPillOn: { backgroundColor: colors.successTint },
@@ -234,8 +236,8 @@ const styles = StyleSheet.create({
   statusDot: { width: 7, height: 7, borderRadius: 4 },
   statusText: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
 
-  hero: { alignItems: 'center', marginTop: spacing.xl },
-  caption: { textAlign: 'center', fontSize: typography.sizes.sm, color: colors.textSecondary, marginTop: spacing.lg },
+  hero: { alignItems: 'center', marginTop: 40 },
+  caption: { textAlign: 'center', fontSize: 14, color: colors.textSecondary, marginTop: 22 },
 
   pinNoticeWrap: { marginTop: spacing.md },
   fallbackLink: {

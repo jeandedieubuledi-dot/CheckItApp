@@ -2,16 +2,29 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, TextInput, Pressable, ScrollView, StyleSheet, RefreshControl, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, radius, typography, nativeShadow } from '@horaires/ui-tokens';
+import { colors, spacing, radius, nativeShadow } from '@horaires/ui-tokens';
 import type { Availability } from '@horaires/shared-types';
 import { apiClient, useAuth } from '../services/AuthService';
 import { ConfirmationBanner } from '../components/ConfirmationBanner';
 import { fonts } from '../theme';
 
 const DAYS = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
+const MONTHS = [
+  'janvier', 'février', 'mars', 'avril', 'mai', 'juin',
+  'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre',
+];
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DEFAULT_START = '09:00';
 const DEFAULT_END = '17:00';
+
+function currentWeekRangeLabel() {
+  const now = new Date();
+  const start = new Date(now);
+  start.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return `${start.getDate()} au ${end.getDate()} ${MONTHS[end.getMonth()]}`;
+}
 
 // Un créneau récurrent par jour de semaine — l'écran affiche les 7 jours,
 // pas seulement les disponibilités déjà déclarées, pour qu'ajuster un
@@ -19,6 +32,7 @@ const DEFAULT_END = '17:00';
 // Les disponibilités ponctuelles (specificDate) ne sont pas gérées ici.
 export function AvailabilitiesScreen() {
   const { user } = useAuth();
+  const weekRangeLabel = useMemo(() => currentWeekRangeLabel(), []);
   const [availabilities, setAvailabilities] = useState<Availability[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [busyDay, setBusyDay] = useState<number | null>(null);
@@ -113,7 +127,7 @@ export function AvailabilitiesScreen() {
           </Text>
         </View>
       </View>
-      <Text style={styles.subtitle}>Un créneau récurrent par jour de la semaine</Text>
+      <Text style={styles.subtitle}>Semaine du {weekRangeLabel}</Text>
 
       {banner ? <ConfirmationBanner kind={banner.kind} message={banner.message} /> : null}
 
@@ -183,10 +197,10 @@ export function AvailabilitiesScreen() {
                     placeholder={DEFAULT_END}
                     placeholderTextColor={colors.textSecondary}
                   />
-                  <Pressable style={styles.saveBtn} onPress={saveEditing}>
+                  <Pressable style={styles.rowSaveBtn} onPress={saveEditing}>
                     <Ionicons name="checkmark" size={16} color={colors.surface} />
                   </Pressable>
-                  <Pressable style={styles.cancelBtn} onPress={() => setEditingDay(null)}>
+                  <Pressable style={styles.rowCancelBtn} onPress={() => setEditingDay(null)}>
                     <Ionicons name="close" size={16} color={colors.textSecondary} />
                   </Pressable>
                 </View>
@@ -195,14 +209,26 @@ export function AvailabilitiesScreen() {
           );
         })}
       </ScrollView>
+
+      <View style={styles.saveBar}>
+        <Pressable
+          style={styles.saveBtn}
+          onPress={() => {
+            setEditingDay(null);
+            setBanner({ kind: 'success', message: 'Disponibilités à jour' });
+          }}
+        >
+          <Text style={styles.saveBtnText}>Enregistrer</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background, padding: spacing.lg },
+  container: { flex: 1, backgroundColor: colors.background, paddingTop: 28, paddingHorizontal: 24 },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  title: { fontFamily: fonts.display, fontSize: typography.sizes.xl, color: colors.textPrimary },
+  title: { fontFamily: fonts.display, fontSize: 24, color: colors.textPrimary, letterSpacing: -0.2 },
   avatar: {
     width: 40,
     height: 40,
@@ -214,18 +240,26 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   avatarText: { fontFamily: fonts.displaySemiBold, fontSize: 14, color: colors.primary },
-  subtitle: { fontSize: 13.5, color: colors.textSecondary, marginTop: 4, marginBottom: spacing.md },
+  subtitle: { fontSize: 13.5, color: colors.textSecondary, marginTop: 6, lineHeight: 18 },
 
-  list: { gap: spacing.sm, paddingBottom: 110 },
+  list: { marginTop: 22, gap: 10, paddingBottom: 190 },
   dayCard: {
     backgroundColor: colors.surface,
     borderWidth: 1.5,
     borderColor: colors.border,
-    borderRadius: radius.lg,
-    padding: spacing.md,
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
   },
-  dayCardEditing: { borderColor: colors.primary, backgroundColor: colors.primaryTint },
-  dayCardOff: { opacity: 0.7 },
+  dayCardEditing: {
+    borderColor: colors.primary,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  dayCardOff: { opacity: 0.62 },
 
   dayRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   dayName: { fontFamily: fonts.displaySemiBold, fontSize: 14.5, color: colors.textPrimary, marginBottom: 8 },
@@ -256,6 +290,20 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     backgroundColor: colors.surface,
   },
-  saveBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
-  cancelBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  rowSaveBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
+  rowCancelBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+
+  saveBar: { position: 'absolute', left: 24, right: 24, bottom: 102 },
+  saveBtn: {
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    paddingVertical: 15,
+    borderRadius: 16,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.28,
+    shadowRadius: 24,
+    elevation: 6,
+  },
+  saveBtnText: { color: colors.surface, fontSize: 14.5, fontWeight: '700' },
 });

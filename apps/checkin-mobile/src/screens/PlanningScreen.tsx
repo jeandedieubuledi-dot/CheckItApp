@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, FlatList, StyleSheet, RefreshControl, Pressable } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, radius, typography, nativeShadow } from '@horaires/ui-tokens';
+import { colors, spacing } from '@horaires/ui-tokens';
 import type { Shift, Site } from '@horaires/shared-types';
 import { apiClient, useAuth } from '../services/AuthService';
 import { fonts } from '../theme';
@@ -16,8 +16,11 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const PENDING_STATUSES = new Set(['offered', 'swap_pending']);
-
 const DAY_LETTERS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+const MONTHS = [
+  'janvier', 'février', 'mars', 'avril', 'mai', 'juin',
+  'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre',
+];
 
 function startOfWeek(date: Date) {
   const d = new Date(date);
@@ -38,7 +41,7 @@ export function PlanningScreen() {
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [sites, setSites] = useState<Site[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [selectedDate, setSelectedDate] = useState(() => new Date());
+  const [weekOffset, setWeekOffset] = useState(0);
 
   const load = useCallback(async () => {
     const [shiftList, siteList] = await Promise.all([apiClient.getShifts(), apiClient.getSites()]);
@@ -61,18 +64,28 @@ export function PlanningScreen() {
   const siteName = (siteId: string) => sites.find((s) => s.id === siteId)?.name ?? siteId;
 
   const today = useMemo(() => new Date(), []);
-  const weekDays = useMemo(() => {
+  const weekStart = useMemo(() => {
     const start = startOfWeek(today);
-    return Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(start);
-      d.setDate(start.getDate() + i);
+    start.setDate(start.getDate() + weekOffset * 7);
+    return start;
+  }, [today, weekOffset]);
+  const weekDays = useMemo(
+    () => Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(weekStart);
+      d.setDate(weekStart.getDate() + i);
       return d;
-    });
-  }, [today]);
+    }),
+    [weekStart],
+  );
+  const weekEnd = weekDays[6];
+  const weekLabel =
+    weekStart.getMonth() === weekEnd.getMonth()
+      ? `${weekStart.getDate()} – ${weekEnd.getDate()} ${MONTHS[weekStart.getMonth()]}`
+      : `${weekStart.getDate()} ${MONTHS[weekStart.getMonth()]} – ${weekEnd.getDate()} ${MONTHS[weekEnd.getMonth()]}`;
 
-  const dayShifts = useMemo(
-    () => shifts.filter((s) => isSameDay(new Date(s.startsAt), selectedDate)),
-    [shifts, selectedDate],
+  const weekShifts = useMemo(
+    () => shifts.filter((s) => weekDays.some((d) => isSameDay(d, new Date(s.startsAt)))),
+    [shifts, weekDays],
   );
 
   return (
@@ -86,39 +99,47 @@ export function PlanningScreen() {
         </View>
       </View>
 
+      <View style={styles.weekNav}>
+        <Pressable style={styles.weekArrow} onPress={() => setWeekOffset((w) => w - 1)}>
+          <Ionicons name="chevron-back" size={15} color={colors.textSecondary} />
+        </Pressable>
+        <Text style={styles.weekLabel}>{weekLabel}</Text>
+        <Pressable style={styles.weekArrow} onPress={() => setWeekOffset((w) => w + 1)}>
+          <Ionicons name="chevron-forward" size={15} color={colors.textSecondary} />
+        </Pressable>
+      </View>
+
       <View style={styles.dayStrip}>
         {weekDays.map((d) => {
-          const selected = isSameDay(d, selectedDate);
+          const today_ = isSameDay(d, today);
           return (
-            <Pressable
-              key={d.toISOString()}
-              onPress={() => setSelectedDate(d)}
-              style={[styles.dayChip, selected && styles.dayChipSelected]}
-            >
-              <Text style={[styles.dayLetter, selected && styles.dayLetterSelected]}>
+            <View key={d.toISOString()} style={[styles.dayChip, today_ && styles.dayChipToday]}>
+              <Text style={[styles.dayLetter, today_ && styles.dayLetterToday]}>
                 {DAY_LETTERS[(d.getDay() + 6) % 7]}
               </Text>
-              <Text style={[styles.dayNum, selected && styles.dayNumSelected]}>{d.getDate()}</Text>
-            </Pressable>
+              <Text style={[styles.dayNum, today_ && styles.dayNumToday]}>{d.getDate()}</Text>
+            </View>
           );
         })}
       </View>
 
       <FlatList
-        data={dayShifts}
+        data={weekShifts}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={refresh} />}
-        ListEmptyComponent={<Text style={styles.empty}>Aucun shift ce jour-là.</Text>}
+        ListEmptyComponent={<Text style={styles.empty}>Aucun shift cette semaine-là.</Text>}
         renderItem={({ item }) => {
           const mine = item.assignments?.find((a) => a.userId === user?.id);
           const pending = mine ? PENDING_STATUSES.has(mine.status) : false;
+          const startDate = new Date(item.startsAt);
+          const dayLabel = isSameDay(startDate, today)
+            ? `Aujourd'hui — ${startDate.toLocaleDateString('fr-BE', { weekday: 'long', day: '2-digit' })}`
+            : startDate.toLocaleDateString('fr-BE', { weekday: 'long', day: '2-digit', month: 'long' });
           return (
             <View style={styles.card}>
               <View style={styles.cardTop}>
-                <Text style={styles.cardDay}>
-                  {new Date(item.startsAt).toLocaleDateString('fr-BE', { weekday: 'long', day: '2-digit', month: 'long' })}
-                </Text>
+                <Text style={styles.cardDay}>{dayLabel}</Text>
                 {mine ? (
                   <View style={[styles.chip, pending ? styles.chipPending : styles.chipConfirmed]}>
                     <Text style={styles.chipText}>{STATUS_LABELS[mine.status] ?? mine.status}</Text>
@@ -126,7 +147,7 @@ export function PlanningScreen() {
                 ) : null}
               </View>
               <Text style={styles.time}>
-                {new Date(item.startsAt).toLocaleTimeString('fr-BE', { hour: '2-digit', minute: '2-digit' })}
+                {startDate.toLocaleTimeString('fr-BE', { hour: '2-digit', minute: '2-digit' })}
                 {' – '}
                 {new Date(item.endsAt).toLocaleTimeString('fr-BE', { hour: '2-digit', minute: '2-digit' })}
               </Text>
@@ -144,9 +165,9 @@ export function PlanningScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background, padding: spacing.lg },
+  container: { flex: 1, backgroundColor: colors.background, paddingTop: 28, paddingHorizontal: 24 },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  title: { fontFamily: fonts.display, fontSize: typography.sizes.xl, color: colors.textPrimary },
+  title: { fontFamily: fonts.display, fontSize: 24, color: colors.textPrimary, letterSpacing: -0.2 },
   avatar: {
     width: 40,
     height: 40,
@@ -159,40 +180,58 @@ const styles = StyleSheet.create({
   },
   avatarText: { fontFamily: fonts.displaySemiBold, fontSize: 14, color: colors.primary },
 
-  dayStrip: { flexDirection: 'row', gap: 6, marginTop: spacing.lg },
+  weekNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 22 },
+  weekLabel: { fontSize: 14, fontWeight: '600', color: colors.textSecondary, textTransform: 'capitalize' },
+  weekArrow: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  dayStrip: { flexDirection: 'row', gap: 6, marginTop: 14 },
   dayChip: {
     flex: 1,
     alignItems: 'center',
     gap: 6,
     paddingVertical: 10,
-    borderRadius: radius.lg,
+    borderRadius: 16,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
   },
-  dayChipSelected: { backgroundColor: colors.primary, borderColor: colors.primary },
+  dayChipToday: { backgroundColor: colors.primary, borderColor: colors.primary },
   dayLetter: { fontSize: 10.5, fontWeight: '600', color: colors.textSecondary, textTransform: 'uppercase' },
-  dayLetterSelected: { color: 'rgba(255,255,255,0.75)' },
+  dayLetterToday: { color: 'rgba(255,255,255,0.75)' },
   dayNum: { fontFamily: fonts.displaySemiBold, fontSize: 14, color: colors.textPrimary },
-  dayNumSelected: { color: colors.surface },
+  dayNumToday: { color: colors.surface },
 
-  listContent: { paddingTop: spacing.lg, paddingBottom: 110, gap: spacing.sm },
+  listContent: { paddingTop: 24, paddingBottom: 110, gap: 12 },
   empty: { color: colors.textSecondary, textAlign: 'center', marginTop: spacing.xl },
   card: {
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.md,
+    borderRadius: 18,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
     gap: 8,
-    ...nativeShadow.sm,
+    shadowColor: '#111827',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   cardDay: { fontSize: 12, fontWeight: '600', color: colors.textSecondary, textTransform: 'capitalize' },
-  chip: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: radius.full },
+  chip: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999 },
   chipConfirmed: { backgroundColor: colors.successTint },
   chipPending: { backgroundColor: colors.warningTint },
   chipText: { fontSize: 11, fontWeight: '700', color: colors.textPrimary },
   time: { fontFamily: fonts.displaySemiBold, fontSize: 21, color: colors.textPrimary, letterSpacing: -0.2 },
-  siteRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  siteRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   site: { fontSize: 13, color: colors.textSecondary },
   role: { fontSize: 13, color: colors.textSecondary },
 });

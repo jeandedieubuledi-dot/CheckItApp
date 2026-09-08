@@ -22,11 +22,16 @@ const TAB_LABELS: Record<string, string> = {
   ShiftApproval: 'Échanges',
 };
 
+const FAB_SIZE = 62;
+
 // Barre de nav flottante, avec le bouton "Pointer" mis en avant au centre
 // (élément le plus visible de l'app — voir CLAUDE.md / brief design). Gère
-// un nombre variable d'onglets (staff: 4 · manager: +Présence +Échanges)
-// en réservant toujours un emplacement central pour le FAB, quel que soit
-// le nombre d'onglets secondaires.
+// un nombre variable d'onglets (staff: 4 · manager: +Présence +Échanges) :
+// les items sont répartis dans deux groupes `flex: 1` de largeur TOUJOURS
+// égale (quel que soit le nombre d'items de chaque côté), avec un espace
+// fixe de la largeur du FAB entre les deux — c'est ce qui garantit que le
+// FAB, positionné en absolu à 50%, tombe pile dans cet espace réservé et
+// jamais sur un item voisin.
 export function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const fabIndex = state.routes.findIndex((r) => r.name === 'ClockIn');
   const sideRoutes = state.routes.filter((r) => r.name !== 'ClockIn');
@@ -58,9 +63,9 @@ export function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarP
 
   return (
     <View style={styles.bar}>
-      {left.map(renderItem)}
-      <View style={styles.spacer} />
-      {right.map(renderItem)}
+      <View style={styles.sideGroup}>{left.map(renderItem)}</View>
+      <View style={styles.gap} />
+      <View style={styles.sideGroup}>{right.map(renderItem)}</View>
 
       {fabRoute ? (
         <Pressable
@@ -93,22 +98,22 @@ const styles = StyleSheet.create({
     borderRadius: radius.xl + 4,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-around',
     paddingHorizontal: spacing.xs,
     ...nativeShadow.lg,
   },
+  sideGroup: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' },
+  gap: { width: FAB_SIZE },
   item: { alignItems: 'center', gap: 4, width: 58 },
   label: { fontSize: 10.5, fontWeight: '600', color: colors.textSecondary },
   labelActive: { color: colors.primary },
-  spacer: { width: 58 },
   fab: {
     position: 'absolute',
     left: '50%',
     top: -22,
-    marginLeft: -31,
-    width: 62,
-    height: 62,
-    borderRadius: 31,
+    marginLeft: -(FAB_SIZE / 2),
+    width: FAB_SIZE,
+    height: FAB_SIZE,
+    borderRadius: FAB_SIZE / 2,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
