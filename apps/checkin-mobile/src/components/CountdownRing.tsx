@@ -1,14 +1,6 @@
-import React, { useEffect } from 'react';
-import { View, StyleSheet } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, StyleSheet, Animated, Easing } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
-import Animated, {
-  useSharedValue,
-  useAnimatedProps,
-  withRepeat,
-  withTiming,
-  Easing,
-  runOnJS,
-} from 'react-native-reanimated';
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
@@ -18,7 +10,7 @@ type Props = {
   durationMs?: number;
   color: string;
   trackColor: string;
-  // Appelé côté JS à chaque fois que l'anneau termine un cycle (se vide
+  // Appelé à chaque fois que l'anneau termine un cycle (se vide
   // complètement) — sert à déclencher le rafraîchissement du QR au même
   // rythme que l'anneau, sans coupler les deux animations entre elles.
   onCycleComplete?: () => void;
@@ -26,9 +18,11 @@ type Props = {
 };
 
 // Anneau de progression circulaire — se vide en `durationMs` (30s par
-// défaut) puis se réinitialise instantanément, en boucle. react-native-svg
-// + Reanimated (pas Skia : Skia nécessite un dev client, pas compatible
-// Expo Go — voir handover).
+// défaut) puis se réinitialise instantanément, en boucle. API `Animated`
+// native de React Native (pas Reanimated) : le strokeDashoffset d'un SVG
+// n'est de toute façon pas driveable par le native driver, et ça évite une
+// dépendance à react-native-worklets qui a fait planter l'app au démarrage
+// sur Expo Go (native module manquant) — voir handover.
 export function CountdownRing({
   size = 224,
   strokeWidth = 8,
@@ -38,30 +32,40 @@ export function CountdownRing({
   onCycleComplete,
   children,
 }: Props) {
-  const progress = useSharedValue(0);
+  const progress = useRef(new Animated.Value(0)).current;
   const center = size / 2;
   const r = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * r;
 
   useEffect(() => {
-    const handleComplete = (finished?: boolean) => {
-      'worklet';
-      if (finished && onCycleComplete) {
-        runOnJS(onCycleComplete)();
-      }
+    let cancelled = false;
+
+    const runCycle = () => {
+      progress.setValue(0);
+      Animated.timing(progress, {
+        toValue: 1,
+        duration: durationMs,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      }).start(({ finished }) => {
+        if (cancelled) return;
+        if (finished) onCycleComplete?.();
+        runCycle();
+      });
     };
-    progress.value = 0;
-    progress.value = withRepeat(
-      withTiming(1, { duration: durationMs, easing: Easing.linear }, handleComplete),
-      -1,
-      false,
-    );
+    runCycle();
+
+    return () => {
+      cancelled = true;
+      progress.stopAnimation();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [durationMs]);
 
-  const animatedProps = useAnimatedProps(() => ({
-    strokeDashoffset: circumference * progress.value,
-  }));
+  const strokeDashoffset = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, circumference],
+  });
 
   return (
     <View style={{ width: size, height: size }}>
@@ -76,7 +80,7 @@ export function CountdownRing({
           fill="none"
           strokeLinecap="round"
           strokeDasharray={circumference}
-          animatedProps={animatedProps}
+          strokeDashoffset={strokeDashoffset}
           rotation={-90}
           origin={`${center}, ${center}`}
         />

@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, StyleSheet, ActivityIndicator, Text } from 'react-native';
-import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
+import { View, StyleSheet, ActivityIndicator, Text, Animated } from 'react-native';
 import * as ScreenCapture from 'expo-screen-capture';
 import QRCode from 'react-native-qrcode-svg';
 import { colors, radius, spacing, typography, nativeShadow } from '@horaires/ui-tokens';
@@ -16,24 +15,25 @@ const RING_SIZE = 224;
 const QR_SIZE = 150;
 
 // Cœur de l'écran de pointage : le QR personnel rotatif de l'employé,
-// entouré de l'anneau de progression (Skia + Reanimated, voir
-// CountdownRing). Capture d'écran interdite tant que ce composant est
-// monté — une photo rendrait le code rejouable jusqu'à son expiration.
+// entouré de l'anneau de progression (voir CountdownRing). Capture d'écran
+// interdite tant que ce composant est monté — une photo rendrait le code
+// rejouable jusqu'à son expiration.
 export function PersonalQrCode() {
   const [payload, setPayload] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const opacity = useSharedValue(1);
+  const opacity = useRef(new Animated.Value(1)).current;
 
   const refresh = useCallback(async () => {
     try {
       const { payload: nextPayload } = await apiClient.getMyRotatingQr();
       if (nextPayload) {
         // Fondu doux plutôt qu'un changement brutal du motif du QR.
-        opacity.value = withTiming(0, { duration: 150 }, (finished) => {
-          if (finished) opacity.value = withTiming(1, { duration: 250 });
-        });
+        Animated.sequence([
+          Animated.timing(opacity, { toValue: 0, duration: 150, useNativeDriver: true }),
+          Animated.timing(opacity, { toValue: 1, duration: 250, useNativeDriver: true }),
+        ]).start();
       }
       setPayload(nextPayload);
       setError(null);
@@ -60,8 +60,6 @@ export function PersonalQrCode() {
     };
   }, [refresh]);
 
-  const qrStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
-
   return (
     <View style={styles.wrap}>
       <View style={styles.glow} />
@@ -70,7 +68,7 @@ export function PersonalQrCode() {
           {isLoading ? (
             <ActivityIndicator size="large" color={colors.primary} />
           ) : payload ? (
-            <Animated.View style={qrStyle}>
+            <Animated.View style={{ opacity }}>
               <QRCode value={payload} size={QR_SIZE} />
             </Animated.View>
           ) : null}
