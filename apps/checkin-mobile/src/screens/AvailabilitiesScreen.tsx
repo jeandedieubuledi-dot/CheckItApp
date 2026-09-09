@@ -1,7 +1,8 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, TextInput, Pressable, ScrollView, StyleSheet, RefreshControl, ActivityIndicator } from 'react-native';
+import { View, Text, Pressable, ScrollView, StyleSheet, RefreshControl, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import DateTimePickerModal from 'react-native-modal-datetime-picker';
 import { colors, spacing, radius, nativeShadow } from '@horaires/ui-tokens';
 import type { Availability } from '@horaires/shared-types';
 import { apiClient, useAuth } from '../services/AuthService';
@@ -13,8 +14,7 @@ const MONTHS = [
   'janvier', 'février', 'mars', 'avril', 'mai', 'juin',
   'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre',
 ];
-const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
-const DEFAULT_START = '09:00';
+const DEFAULT_START = '08:00';
 const DEFAULT_END = '17:00';
 
 function currentWeekRangeLabel() {
@@ -24,6 +24,20 @@ function currentWeekRangeLabel() {
   const end = new Date(start);
   end.setDate(start.getDate() + 6);
   return `${start.getDate()} au ${end.getDate()} ${MONTHS[end.getMonth()]}`;
+}
+
+// "HH:mm" <-> Date — le picker natif travaille avec un Date, mais tout le
+// reste de l'écran (state, API) manipule la chaîne HH:mm attendue par
+// Availability.startTime/endTime côté backend.
+function timeToDate(time: string): Date {
+  const [hours, minutes] = time.split(':').map(Number);
+  const date = new Date();
+  date.setHours(hours, minutes, 0, 0);
+  return date;
+}
+
+function dateToTime(date: Date): string {
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
 // Un créneau récurrent par jour de semaine — l'écran affiche les 7 jours,
@@ -39,6 +53,9 @@ export function AvailabilitiesScreen() {
   const [editingDay, setEditingDay] = useState<number | null>(null);
   const [draftStart, setDraftStart] = useState(DEFAULT_START);
   const [draftEnd, setDraftEnd] = useState(DEFAULT_END);
+  // Quel champ le picker natif est en train de modifier — un seul picker
+  // partagé pour début et fin plutôt que deux instances.
+  const [pickerField, setPickerField] = useState<'start' | 'end' | null>(null);
   const [banner, setBanner] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
 
   const load = useCallback(async () => {
@@ -68,6 +85,10 @@ export function AvailabilitiesScreen() {
     return map;
   }, [availabilities]);
 
+  // Comparaison lexicographique valide car "HH:mm" est toujours à largeur
+  // fixe et zero-paddé (garanti par le picker natif, plus de saisie libre).
+  const timeError = draftEnd <= draftStart ? "L'heure de fin doit être après l'heure de début" : null;
+
   const toggleDay = async (day: number) => {
     const record = recordForDay.get(day);
     setBusyDay(day);
@@ -93,11 +114,23 @@ export function AvailabilitiesScreen() {
     setEditingDay(day);
   };
 
+  const cancelEditing = () => {
+    setEditingDay(null);
+    setPickerField(null);
+  };
+
+  const confirmPickedTime = (date: Date) => {
+    const formatted = dateToTime(date);
+    if (pickerField === 'start') setDraftStart(formatted);
+    else if (pickerField === 'end') setDraftEnd(formatted);
+    setPickerField(null);
+  };
+
   const saveEditing = async () => {
     if (editingDay === null) return;
     setBanner(null);
-    if (!TIME_PATTERN.test(draftStart) || !TIME_PATTERN.test(draftEnd)) {
-      setBanner({ kind: 'error', message: 'Heures au format HH:mm' });
+    if (timeError) {
+      setBanner({ kind: 'error', message: timeError });
       return;
     }
     const record = recordForDay.get(editingDay);
@@ -181,34 +214,48 @@ export function AvailabilitiesScreen() {
               </View>
 
               {editing ? (
-                <View style={styles.editRow}>
-                  <TextInput
-                    style={styles.timeInput}
-                    value={draftStart}
-                    onChangeText={setDraftStart}
-                    placeholder={DEFAULT_START}
-                    placeholderTextColor={colors.textSecondary}
-                  />
-                  <Text style={styles.timeSep}>–</Text>
-                  <TextInput
-                    style={styles.timeInput}
-                    value={draftEnd}
-                    onChangeText={setDraftEnd}
-                    placeholder={DEFAULT_END}
-                    placeholderTextColor={colors.textSecondary}
-                  />
-                  <Pressable style={styles.rowSaveBtn} onPress={saveEditing}>
-                    <Ionicons name="checkmark" size={16} color={colors.surface} />
-                  </Pressable>
-                  <Pressable style={styles.rowCancelBtn} onPress={() => setEditingDay(null)}>
-                    <Ionicons name="close" size={16} color={colors.textSecondary} />
-                  </Pressable>
+                <View style={styles.editBlock}>
+                  <View style={styles.editRow}>
+                    <Pressable style={styles.timeButton} onPress={() => setPickerField('start')}>
+                      <Text style={styles.timeButtonLabel}>Heure de début</Text>
+                      <Text style={styles.timeButtonValue}>{draftStart}</Text>
+                    </Pressable>
+                    <Text style={styles.timeSep}>–</Text>
+                    <Pressable
+                      style={[styles.timeButton, timeError && styles.timeButtonInvalid]}
+                      onPress={() => setPickerField('end')}
+                    >
+                      <Text style={styles.timeButtonLabel}>Heure de fin</Text>
+                      <Text style={styles.timeButtonValue}>{draftEnd}</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.rowSaveBtn, timeError && styles.rowSaveBtnDisabled]}
+                      onPress={saveEditing}
+                      disabled={!!timeError}
+                    >
+                      <Ionicons name="checkmark" size={16} color={colors.surface} />
+                    </Pressable>
+                    <Pressable style={styles.rowCancelBtn} onPress={cancelEditing}>
+                      <Ionicons name="close" size={16} color={colors.textSecondary} />
+                    </Pressable>
+                  </View>
+                  {timeError ? <Text style={styles.timeErrorText}>{timeError}</Text> : null}
                 </View>
               ) : null}
             </View>
           );
         })}
       </ScrollView>
+
+      <DateTimePickerModal
+        isVisible={pickerField !== null}
+        mode="time"
+        is24Hour
+        locale="fr-FR"
+        date={timeToDate(pickerField === 'start' ? draftStart : draftEnd)}
+        onConfirm={confirmPickedTime}
+        onCancel={() => setPickerField(null)}
+      />
 
       <View style={styles.saveBar}>
         <Pressable
@@ -276,21 +323,24 @@ const styles = StyleSheet.create({
   timeSep: { color: colors.textSecondary, fontSize: 12 },
   offLabel: { fontSize: 12.5, color: colors.textSecondary, fontWeight: '600' },
 
-  editRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: spacing.sm },
-  timeInput: {
+  editBlock: { marginTop: spacing.sm },
+  editRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  timeButton: {
     flex: 1,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.md,
     paddingHorizontal: spacing.sm,
-    paddingVertical: 8,
-    textAlign: 'center',
-    fontFamily: fonts.displaySemiBold,
-    fontSize: 13,
-    color: colors.textPrimary,
+    paddingVertical: 6,
+    alignItems: 'center',
     backgroundColor: colors.surface,
   },
+  timeButtonInvalid: { borderColor: colors.danger },
+  timeButtonLabel: { fontSize: 10, color: colors.textSecondary, marginBottom: 1 },
+  timeButtonValue: { fontFamily: fonts.displaySemiBold, fontSize: 14, color: colors.textPrimary },
+  timeErrorText: { fontSize: 12, color: colors.danger, marginTop: 6 },
   rowSaveBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
+  rowSaveBtnDisabled: { opacity: 0.4 },
   rowCancelBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
 
   saveBar: { position: 'absolute', left: 24, right: 24, bottom: 102 },
