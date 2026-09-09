@@ -19,7 +19,7 @@ export class ShiftsController {
 
   @Get('shifts')
   findAll(@CurrentUser() user: AuthenticatedUser, @Query() query: FindShiftsQueryDto) {
-    return this.shiftsService.findAll(user.companyId, query);
+    return this.shiftsService.findAll(user, query);
   }
 
   @Get('shifts/:id')

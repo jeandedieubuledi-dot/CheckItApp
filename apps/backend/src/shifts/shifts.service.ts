@@ -34,10 +34,16 @@ export class ShiftsService {
     });
   }
 
-  findAll(companyId: string, query: FindShiftsQueryDto) {
+  // Un employé ne voit que les shifts où il a une assignation — jamais le
+  // planning complet du site (filtré côté requête Prisma, pas juste caché
+  // à l'affichage : un employé ne doit jamais recevoir les données des
+  // shifts d'un collègue). Managers/admins continuent de voir tout le site.
+  findAll(user: AuthenticatedUser, query: FindShiftsQueryDto) {
+    const isEmployee = user.role === 'employee';
+
     return this.prisma.shift.findMany({
       where: {
-        site: { companyId },
+        site: { companyId: user.companyId },
         ...(query.siteId ? { siteId: query.siteId } : {}),
         ...(query.from || query.to
           ? {
@@ -47,8 +53,14 @@ export class ShiftsService {
               },
             }
           : {}),
+        ...(isEmployee ? { assignments: { some: { userId: user.userId } } } : {}),
       },
-      include: { assignments: { include: { offers: true } } },
+      include: {
+        // Même filtrage sur les assignations incluses : un shift peut avoir
+        // une assignation annulée appartenant à un autre employé (historique
+        // de réassignation) — un employé ne doit jamais la voir non plus.
+        assignments: { where: isEmployee ? { userId: user.userId } : undefined, include: { offers: true } },
+      },
       orderBy: { startsAt: 'asc' },
     });
   }
@@ -128,6 +140,7 @@ export class ShiftsService {
       throw new NotFoundException('Utilisateur introuvable');
     }
 
+    await this.ensureAvailable(dto.userId, shift.startsAt, shift.endsAt);
     await this.ensureNoOverlap(dto.userId, shift.startsAt, shift.endsAt, shiftId);
 
     return this.prisma.shiftAssignment.create({
@@ -298,4 +311,59 @@ export class ShiftsService {
       );
     }
   }
+
+  // Un manager ne peut pas assigner un shift à un employé qui a déclaré ne
+  // pas être disponible ce jour-là (ou qui n'a rien déclaré du tout — on
+  // bloque par défaut plutôt que d'assigner par erreur, voir brief). Une
+  // disponibilité ponctuelle (specificDate) pour le jour exact prime sur
+  // une disponibilité récurrente (dayOfWeek) du même jour.
+  private async ensureAvailable(userId: string, startsAt: Date, endsAt: Date) {
+    const dayStart = new Date(Date.UTC(startsAt.getUTCFullYear(), startsAt.getUTCMonth(), startsAt.getUTCDate()));
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+    const dayOfWeek = (startsAt.getUTCDay() + 6) % 7; // lundi = 0, même convention que le reste de l'app
+
+    const specific = await this.prisma.availability.findFirst({
+      where: { userId, specificDate: { gte: dayStart, lt: dayEnd } },
+    });
+    const availability =
+      specific ??
+      (await this.prisma.availability.findFirst({
+        where: { userId, dayOfWeek, specificDate: null },
+      }));
+
+    const dateLabel = formatDate(dayStart);
+    const shiftRangeLabel = `${formatTime(startsAt)} et ${formatTime(endsAt)}`;
+
+    if (!availability || !availability.isAvailable) {
+      throw new ConflictException(`Cet employé n'est pas disponible le ${dateLabel} entre ${shiftRangeLabel}`);
+    }
+
+    const availStart = timeOnDay(dayStart, availability.startTime);
+    const availEnd = timeOnDay(dayStart, availability.endTime);
+    if (startsAt < availStart || endsAt > availEnd) {
+      throw new ConflictException(
+        `Cet employé n'est disponible que de ${availability.startTime} à ${availability.endTime} le ${dateLabel}, ` +
+          `en dehors du créneau du shift (${shiftRangeLabel})`,
+      );
+    }
+  }
+}
+
+function pad(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+function formatDate(d: Date): string {
+  return `${pad(d.getUTCDate())}/${pad(d.getUTCMonth() + 1)}/${d.getUTCFullYear()}`;
+}
+
+function formatTime(d: Date): string {
+  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
+// Combine un jour (minuit UTC) avec une heure "HH:mm" déclarée dans une
+// Availability, pour pouvoir la comparer aux bornes startsAt/endsAt du shift.
+function timeOnDay(dayStart: Date, hhmm: string): Date {
+  const [h, m] = hhmm.split(':').map(Number);
+  return new Date(dayStart.getTime() + h * 60 * 60 * 1000 + m * 60 * 1000);
 }

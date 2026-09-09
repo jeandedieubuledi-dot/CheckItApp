@@ -8,6 +8,7 @@ describe('ShiftsService', () => {
   let prisma: {
     site: { findFirst: jest.Mock };
     user: { findFirst: jest.Mock };
+    availability: { findFirst: jest.Mock };
     shift: { create: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock; update: jest.Mock; delete: jest.Mock };
     shiftAssignment: {
       create: jest.Mock;
@@ -24,6 +25,7 @@ describe('ShiftsService', () => {
     prisma = {
       site: { findFirst: jest.fn() },
       user: { findFirst: jest.fn() },
+      availability: { findFirst: jest.fn() },
       shift: {
         create: jest.fn(),
         findMany: jest.fn(),
@@ -47,6 +49,29 @@ describe('ShiftsService', () => {
     }).compile();
 
     service = module.get(ShiftsService);
+  });
+
+  describe('findAll', () => {
+    it('scopes an employee to shifts where they have an assignment', async () => {
+      prisma.shift.findMany.mockResolvedValue([]);
+
+      await service.findAll({ userId: 'user-1', companyId: 'company-a', role: 'employee' }, {});
+
+      const call = prisma.shift.findMany.mock.calls[0][0];
+      expect(call.where.assignments).toEqual({ some: { userId: 'user-1' } });
+      expect(call.include.assignments.where).toEqual({ userId: 'user-1' });
+    });
+
+    it('lets a manager see every shift in the company, with all assignments', async () => {
+      prisma.shift.findMany.mockResolvedValue([]);
+
+      await service.findAll({ userId: 'manager-1', companyId: 'company-a', role: 'manager' }, {});
+
+      const call = prisma.shift.findMany.mock.calls[0][0];
+      expect(call.where.assignments).toBeUndefined();
+      expect(call.include.assignments.where).toBeUndefined();
+      expect(call.where.site).toEqual({ companyId: 'company-a' });
+    });
   });
 
   describe('create', () => {
@@ -182,6 +207,18 @@ describe('ShiftsService', () => {
       assignments: [],
     };
 
+    // Par défaut, l'employé est disponible toute la journée — les tests
+    // ciblant une autre règle (chevauchement, entreprise...) n'ont pas à se
+    // soucier de la disponibilité ; les tests dédiés ci-dessous l'écrasent.
+    beforeEach(() => {
+      prisma.availability.findFirst.mockResolvedValue({
+        isAvailable: true,
+        startTime: '00:00',
+        endTime: '23:59',
+        specificDate: null,
+      });
+    });
+
     it('refuses to assign a user from another company', async () => {
       prisma.shift.findFirst.mockResolvedValue(shift1);
       prisma.user.findFirst.mockResolvedValue(null);
@@ -258,6 +295,85 @@ describe('ShiftsService', () => {
       expect(prisma.shiftAssignment.create).toHaveBeenCalledWith({
         data: { shiftId: 'shift-1', userId: 'user-1', status: 'assigned' },
       });
+    });
+
+    it('blocks assigning when the employee declared no availability at all for that day', async () => {
+      prisma.shift.findFirst.mockResolvedValue(shift1);
+      prisma.user.findFirst.mockResolvedValue({ id: 'user-1' });
+      prisma.availability.findFirst.mockResolvedValue(null);
+
+      await expect(service.assign('company-a', 'shift-1', { userId: 'user-1' })).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.shiftAssignment.create).not.toHaveBeenCalled();
+    });
+
+    it('blocks assigning when the employee marked that day as unavailable', async () => {
+      prisma.shift.findFirst.mockResolvedValue(shift1);
+      prisma.user.findFirst.mockResolvedValue({ id: 'user-1' });
+      prisma.availability.findFirst.mockResolvedValue({
+        isAvailable: false,
+        startTime: '09:00',
+        endTime: '17:00',
+        specificDate: null,
+      });
+
+      await expect(service.assign('company-a', 'shift-1', { userId: 'user-1' })).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.shiftAssignment.create).not.toHaveBeenCalled();
+    });
+
+    it("blocks assigning when the shift falls outside the employee's declared hours", async () => {
+      prisma.shift.findFirst.mockResolvedValue(shift1); // 08:00 -> 16:00
+      prisma.user.findFirst.mockResolvedValue({ id: 'user-1' });
+      prisma.availability.findFirst.mockResolvedValue({
+        isAvailable: true,
+        startTime: '09:00',
+        endTime: '12:00',
+        specificDate: null,
+      });
+
+      await expect(service.assign('company-a', 'shift-1', { userId: 'user-1' })).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.shiftAssignment.create).not.toHaveBeenCalled();
+    });
+
+    it("allows assigning when the shift falls within the employee's declared hours", async () => {
+      prisma.shift.findFirst.mockResolvedValue(shift1); // 08:00 -> 16:00
+      prisma.user.findFirst.mockResolvedValue({ id: 'user-1' });
+      prisma.availability.findFirst.mockResolvedValue({
+        isAvailable: true,
+        startTime: '07:00',
+        endTime: '17:00',
+        specificDate: null,
+      });
+      prisma.shiftAssignment.findFirst.mockResolvedValue(null);
+      prisma.shiftAssignment.create.mockResolvedValue({ id: 'assignment-1' });
+
+      await service.assign('company-a', 'shift-1', { userId: 'user-1' });
+
+      expect(prisma.shiftAssignment.create).toHaveBeenCalledWith({
+        data: { shiftId: 'shift-1', userId: 'user-1', status: 'assigned' },
+      });
+    });
+
+    it('prefers a specific-date availability over a recurring one for the same day, without even checking the recurring one', async () => {
+      prisma.shift.findFirst.mockResolvedValue(shift1);
+      prisma.user.findFirst.mockResolvedValue({ id: 'user-1' });
+      prisma.availability.findFirst.mockResolvedValueOnce({
+        isAvailable: false,
+        startTime: '09:00',
+        endTime: '17:00',
+        specificDate: shift1.startsAt,
+      });
+
+      await expect(service.assign('company-a', 'shift-1', { userId: 'user-1' })).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.availability.findFirst).toHaveBeenCalledTimes(1);
+      expect(prisma.shiftAssignment.create).not.toHaveBeenCalled();
     });
   });
 
