@@ -1,8 +1,10 @@
 import type {
   AuthResponse,
   Availability,
+  Company,
   DeviceAuthResponse,
   DeviceTimeEntryResult,
+  PresentEmployee,
   RotatingQrCode,
   Shift,
   ShiftAssignment,
@@ -151,6 +153,16 @@ export class ApiClient {
     });
   }
 
+  // ---- Entreprise ----
+  getMyCompany() {
+    return this.request<Company>('GET', '/companies/me');
+  }
+
+  // Réglage GPS par défaut de l'entreprise (admin uniquement).
+  updateCompanySettings(payload: { gpsClockInEnabled: boolean }) {
+    return this.request<Company>('PATCH', '/companies/me/settings', payload);
+  }
+
   // ---- Sites ----
   getSites() {
     return this.request<Site[]>('GET', '/sites');
@@ -177,11 +189,16 @@ export class ApiClient {
     return this.request<{ ok: true }>('POST', `/users/${userId}/pin`, { pin });
   }
 
+  // Surcharge individuelle du réglage GPS — `gpsClockInEnabled: null` remet
+  // l'employé sur le réglage entreprise par défaut.
+  updateUserSettings(userId: string, payload: { gpsClockInEnabled: boolean | null }) {
+    return this.request<User>('PATCH', `/users/${userId}/settings`, payload);
+  }
+
+  // Managers/admins uniquement — inclut désormais le mode de pointage et,
+  // pour un pointage GPS, la distance par rapport au site.
   getPresence(siteId: string) {
-    return this.request<{ id: string; firstName: string; lastName: string; since: string }[]>(
-      'GET',
-      `/sites/${siteId}/presence`,
-    );
+    return this.request<PresentEmployee[]>('GET', `/sites/${siteId}/presence`);
   }
 
   // ---- Pointage (checkin-mobile — l'employé pointe pour lui-même) ----

@@ -10,6 +10,7 @@ import { RotatingQrService } from './rotating-qr.service';
 import { InviteUserDto } from './dto/invite-user.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { SetPinDto } from './dto/set-pin.dto';
+import { UpdateUserSettingsDto } from './dto/update-user-settings.dto';
 
 @ApiTags('users')
 @Controller('users')
@@ -73,5 +74,16 @@ export class UsersController {
     @Body() dto: SetPinDto,
   ) {
     return this.usersService.setPin(user.companyId, id, dto);
+  }
+
+  @Patch(':id/settings')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'manager')
+  updateSettings(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateUserSettingsDto,
+  ) {
+    return this.usersService.updateSettings(user.companyId, id, dto);
   }
 }

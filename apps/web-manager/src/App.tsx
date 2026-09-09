@@ -8,6 +8,7 @@ import { PlanningPage } from './pages/PlanningPage'; // SEUL endroit avec créat
 import { PresenceLivePage } from './pages/PresenceLivePage';
 import { ShiftApprovalPage } from './pages/ShiftApprovalPage';
 import { TeamPage } from './pages/TeamPage'; // gestion des employés, badges, PIN
+import { SettingsPage } from './pages/SettingsPage'; // réglages entreprise (ex: pointage GPS)
 
 /**
  * App web réservée aux managers/admins. C'est le SEUL endroit de tout le
@@ -55,6 +56,7 @@ function RootRoutes() {
         <Route path="/presence" element={<PresenceLivePage />} />
         <Route path="/approvals" element={<ShiftApprovalPage />} />
         <Route path="/team" element={<TeamPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/planning" replace />} />
       </Routes>
     </AppShell>

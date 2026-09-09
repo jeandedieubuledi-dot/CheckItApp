@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { InviteUserDto } from './dto/invite-user.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { SetPinDto } from './dto/set-pin.dto';
+import { UpdateUserSettingsDto } from './dto/update-user-settings.dto';
 
 const SALT_ROUNDS = 12;
 
@@ -18,6 +19,7 @@ const SAFE_USER_SELECT = {
   role: true,
   status: true,
   badgeCode: true,
+  gpsClockInEnabled: true,
   createdAt: true,
 } as const;
 
@@ -80,6 +82,17 @@ export class UsersService {
     return this.prisma.user.update({
       where: { id },
       data: { badgeCode },
+      select: SAFE_USER_SELECT,
+    });
+  }
+
+  // Surcharge individuelle du réglage GPS de l'entreprise. `null` explicite
+  // remet l'employé sur le réglage entreprise (voir TimeEntriesService).
+  async updateSettings(companyId: string, id: string, dto: UpdateUserSettingsDto) {
+    await this.findOne(companyId, id);
+    return this.prisma.user.update({
+      where: { id },
+      data: { gpsClockInEnabled: dto.gpsClockInEnabled },
       select: SAFE_USER_SELECT,
     });
   }

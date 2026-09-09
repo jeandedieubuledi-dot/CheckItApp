@@ -7,6 +7,7 @@ import { Roles } from '../auth/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../auth/current-user.decorator';
 import { CompaniesService } from './companies.service';
 import { UpdateCompanyDto } from './dto/update-company.dto';
+import { UpdateCompanySettingsDto } from './dto/update-company-settings.dto';
 
 @ApiTags('companies')
 @Controller('companies')
@@ -24,5 +25,12 @@ export class CompaniesController {
   @Roles('admin')
   updateMine(@CurrentUser() user: AuthenticatedUser, @Body() dto: UpdateCompanyDto) {
     return this.companiesService.updateMine(user.companyId, dto);
+  }
+
+  @Patch('me/settings')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  updateSettings(@CurrentUser() user: AuthenticatedUser, @Body() dto: UpdateCompanySettingsDto) {
+    return this.companiesService.updateSettings(user.companyId, dto);
   }
 }

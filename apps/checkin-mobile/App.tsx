@@ -16,6 +16,7 @@ import { ClockInScreen } from './src/screens/ClockInScreen';
 import { AvailabilitiesScreen } from './src/screens/AvailabilitiesScreen';
 import { ShiftMarketplaceScreen } from './src/screens/ShiftMarketplaceScreen';
 import { PlanningScreen } from './src/screens/PlanningScreen'; // lecture seule
+import { ProfileScreen } from './src/screens/ProfileScreen';
 
 // Écrans manager uniquement
 import { PresenceLiveScreen } from './src/screens/PresenceLiveScreen';
@@ -118,6 +119,8 @@ function MainTabs() {
           />
         </>
       ) : null}
+
+      <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Profil' }} />
     </Tab.Navigator>
   );
 }

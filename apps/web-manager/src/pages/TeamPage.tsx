@@ -88,6 +88,19 @@ export function TeamPage() {
     }
   };
 
+  // Surcharge individuelle du pointage GPS — tri-state : 'inherit' (null,
+  // suit le réglage entreprise), 'on' (true), 'off' (false).
+  const changeGpsSetting = async (userId: string, value: 'inherit' | 'on' | 'off') => {
+    setBusyUserId(userId);
+    try {
+      const gpsClockInEnabled = value === 'inherit' ? null : value === 'on';
+      await apiClient.updateUserSettings(userId, { gpsClockInEnabled });
+      await load();
+    } finally {
+      setBusyUserId(null);
+    }
+  };
+
   return (
     <div>
       <h1 style={styles.title}>Équipe</h1>
@@ -144,6 +157,7 @@ export function TeamPage() {
               <th style={styles.th}>Statut</th>
               <th style={styles.th}>Badge</th>
               <th style={styles.th}>PIN</th>
+              <th style={styles.th}>Pointage GPS</th>
             </tr>
           </thead>
           <tbody>
@@ -199,6 +213,18 @@ export function TeamPage() {
                     </button>
                   </div>
                 </td>
+                <td style={styles.td}>
+                  <select
+                    style={styles.inlineSelect}
+                    value={u.gpsClockInEnabled === true ? 'on' : u.gpsClockInEnabled === false ? 'off' : 'inherit'}
+                    disabled={busyUserId === u.id}
+                    onChange={(e) => changeGpsSetting(u.id, e.target.value as 'inherit' | 'on' | 'off')}
+                  >
+                    <option value="inherit">Suit le réglage entreprise</option>
+                    <option value="on">Activé (surcharge)</option>
+                    <option value="off">Désactivé (surcharge)</option>
+                  </select>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -248,7 +274,7 @@ const styles: Record<string, React.CSSProperties> = {
     overflowX: 'auto',
     boxShadow: shadows.sm,
   },
-  table: { width: '100%', minWidth: 640, borderCollapse: 'collapse' },
+  table: { width: '100%', minWidth: 820, borderCollapse: 'collapse' },
   th: {
     textAlign: 'left',
     padding: spacing.sm,

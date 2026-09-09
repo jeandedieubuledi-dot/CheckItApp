@@ -1,5 +1,5 @@
-import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
-import { TimeEntryType } from '@prisma/client';
+import { ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { Prisma, TimeEntrySource, TimeEntryType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { RotatingQrService } from '../users/rotating-qr.service';
@@ -85,6 +85,10 @@ export class TimeEntriesService {
   }
 
   async createSelf(user: AuthenticatedUser, dto: CreateSelfTimeEntryDto) {
+    if (dto.source === 'gps') {
+      await this.ensureGpsClockInAllowed(user.userId);
+    }
+
     let siteId: string;
     let deviceId: string | undefined;
 
@@ -196,15 +200,29 @@ export class TimeEntriesService {
     const entries = await this.prisma.timeEntry.findMany({
       where: { siteId, type: { in: PRESENCE_TYPES } },
       orderBy: { timestamp: 'asc' },
-      select: { userId: true, type: true, timestamp: true },
+      select: { userId: true, type: true, timestamp: true, source: true, geoLat: true, geoLng: true },
     });
 
     // On garde le dernier pointage de chaque employé — s'il s'agit d'un
     // clock_in, l'employé est présent depuis ce timestamp précis (sert à
-    // afficher "depuis 09:00" côté client sans recalcul serveur).
-    const lastEntryByUser = new Map<string, { type: TimeEntryType; since: Date }>();
+    // afficher "depuis 09:00" et le mode de pointage côté client sans
+    // recalcul serveur).
+    type LastEntry = {
+      type: TimeEntryType;
+      since: Date;
+      source: TimeEntrySource;
+      geoLat: Prisma.Decimal | null;
+      geoLng: Prisma.Decimal | null;
+    };
+    const lastEntryByUser = new Map<string, LastEntry>();
     for (const entry of entries) {
-      lastEntryByUser.set(entry.userId, { type: entry.type, since: entry.timestamp });
+      lastEntryByUser.set(entry.userId, {
+        type: entry.type,
+        since: entry.timestamp,
+        source: entry.source,
+        geoLat: entry.geoLat,
+        geoLng: entry.geoLng,
+      });
     }
 
     const present = [...lastEntryByUser.entries()].filter(([, e]) => e.type === 'clock_in');
@@ -216,9 +234,28 @@ export class TimeEntriesService {
       where: { id: { in: present.map(([userId]) => userId) } },
       select: { id: true, firstName: true, lastName: true },
     });
-    const sinceByUser = new Map(present.map(([userId, e]) => [userId, e.since]));
+    const entryByUser = new Map(present);
+    const siteLat = site.geoLat != null ? Number(site.geoLat) : null;
+    const siteLng = site.geoLng != null ? Number(site.geoLng) : null;
 
-    return users.map((u) => ({ ...u, since: sinceByUser.get(u.id)! }));
+    return users.map((u) => {
+      const entry = entryByUser.get(u.id)!;
+      const geoLat = entry.geoLat != null ? Number(entry.geoLat) : null;
+      const geoLng = entry.geoLng != null ? Number(entry.geoLng) : null;
+      const distanceFromSiteMeters =
+        entry.source === 'gps' && geoLat !== null && geoLng !== null && siteLat !== null && siteLng !== null
+          ? haversineDistanceMeters(geoLat, geoLng, siteLat, siteLng)
+          : null;
+
+      return {
+        ...u,
+        since: entry.since,
+        source: entry.source,
+        geoLat,
+        geoLng,
+        distanceFromSiteMeters,
+      };
+    });
   }
 
   private async resolveDeviceUser(device: AuthenticatedDevice, dto: CreateDeviceTimeEntryDto) {
@@ -248,4 +285,31 @@ export class TimeEntriesService {
     });
     return last?.type === 'clock_in' ? 'clock_out' : 'clock_in';
   }
+
+  // User.gpsClockInEnabled (surcharge individuelle) prime sur
+  // Company.gpsClockInEnabled (réglage par défaut) quand il est renseigné.
+  private async ensureGpsClockInAllowed(userId: string) {
+    const requester = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { gpsClockInEnabled: true, company: { select: { gpsClockInEnabled: true } } },
+    });
+    const enabled = requester?.gpsClockInEnabled ?? requester?.company.gpsClockInEnabled ?? true;
+    if (!enabled) {
+      throw new ForbiddenException("Le pointage GPS n'est pas autorisé pour cet utilisateur");
+    }
+  }
+}
+
+// Distance à vol d'oiseau (formule de Haversine), en mètres — sert au
+// manager à juger si un pointage GPS est cohérent avec une présence réelle
+// sur le site (voir sites/presence).
+function haversineDistanceMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6_371_000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(R * c);
 }

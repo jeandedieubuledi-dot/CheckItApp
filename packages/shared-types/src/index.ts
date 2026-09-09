@@ -24,6 +24,7 @@ export interface Company {
   id: string;
   name: string;
   plan: string;
+  gpsClockInEnabled: boolean;
   createdAt: string;
 }
 
@@ -45,7 +46,10 @@ export interface User {
   lastName: string;
   role: UserRole;
   status: UserStatus;
-  // pas de badgeCode/pinCodeHash exposés côté client par défaut
+  // null = suit le réglage entreprise par défaut (Company.gpsClockInEnabled),
+  // true/false = surcharge individuelle explicite.
+  gpsClockInEnabled?: boolean | null;
+  // pas de pinCodeHash exposé côté client par défaut
 }
 
 export interface TimeEntry {
@@ -124,4 +128,18 @@ export interface DeviceTimeEntryResult extends TimeEntry {
 export interface RotatingQrCode {
   payload: string; // à passer tel quel dans le QR ; encode { userId, code }
   validUntil: string;
+}
+
+// ---- GET /sites/:id/presence (managers/admins uniquement) ----
+
+export interface PresentEmployee {
+  id: string;
+  firstName: string;
+  lastName: string;
+  since: string;
+  source: TimeEntrySource;
+  geoLat: number | null;
+  geoLng: number | null;
+  // null si source !== 'gps', ou si le site n'a pas de coordonnées déclarées.
+  distanceFromSiteMeters: number | null;
 }

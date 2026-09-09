@@ -64,6 +64,9 @@ model Company {
   id        String   @id @default(uuid())
   name      String
   plan      String   @default("free")
+  // Réglage par défaut pour toute l'entreprise — surchargeable par employé
+  // via User.gpsClockInEnabled (voir TimeEntriesService).
+  gpsClockInEnabled Boolean @default(true) @map("gps_clock_in_enabled")
   createdAt DateTime @default(now()) @map("created_at")
 
   sites     Site[]
@@ -107,6 +110,9 @@ model User {
   // activation du pointage QR (voir RotatingQrService.generateCode). Jamais
   // exposé au client : seul le code à 6 chiffres dérivé l'est.
   qrSecret     String?    @map("qr_secret")
+  // Surcharge individuelle du réglage entreprise (Company.gpsClockInEnabled) —
+  // null = hérite du réglage entreprise, true/false = override explicite.
+  gpsClockInEnabled Boolean? @map("gps_clock_in_enabled")
   createdAt    DateTime   @default(now()) @map("created_at")
 
   timeEntries         TimeEntry[]       @relation("UserTimeEntries")

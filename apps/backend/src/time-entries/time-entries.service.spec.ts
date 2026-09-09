@@ -1,5 +1,5 @@
 import { Test } from '@nestjs/testing';
-import { NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { RotatingQrService } from '../users/rotating-qr.service';
@@ -8,7 +8,7 @@ import { TimeEntriesService } from './time-entries.service';
 describe('TimeEntriesService', () => {
   let service: TimeEntriesService;
   let prisma: {
-    user: { findFirst: jest.Mock; findMany: jest.Mock };
+    user: { findFirst: jest.Mock; findMany: jest.Mock; findUnique: jest.Mock };
     site: { findFirst: jest.Mock };
     siteDevice: { findFirst: jest.Mock };
     timeEntry: { create: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock; update: jest.Mock };
@@ -18,7 +18,7 @@ describe('TimeEntriesService', () => {
 
   beforeEach(async () => {
     prisma = {
-      user: { findFirst: jest.fn(), findMany: jest.fn() },
+      user: { findFirst: jest.fn(), findMany: jest.fn(), findUnique: jest.fn() },
       site: { findFirst: jest.fn() },
       siteDevice: { findFirst: jest.fn() },
       timeEntry: {
@@ -210,6 +210,41 @@ describe('TimeEntriesService', () => {
       expect(prisma.timeEntry.create).not.toHaveBeenCalled();
     });
 
+    it('blocks a gps entry when the user has an explicit override disabling it', async () => {
+      prisma.user.findUnique.mockResolvedValue({ gpsClockInEnabled: false, company: { gpsClockInEnabled: true } });
+
+      await expect(
+        service.createSelf(user, { type: 'clock_in' as any, source: 'gps', siteId: 'site-a', geoLat: 50.8, geoLng: 4.35 }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.site.findFirst).not.toHaveBeenCalled();
+      expect(prisma.timeEntry.create).not.toHaveBeenCalled();
+    });
+
+    it('blocks a gps entry when the user has no override and the company disabled it', async () => {
+      prisma.user.findUnique.mockResolvedValue({ gpsClockInEnabled: null, company: { gpsClockInEnabled: false } });
+
+      await expect(
+        service.createSelf(user, { type: 'clock_in' as any, source: 'gps', siteId: 'site-a', geoLat: 50.8, geoLng: 4.35 }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.timeEntry.create).not.toHaveBeenCalled();
+    });
+
+    it("lets the user's override re-enable gps even though the company disabled it", async () => {
+      prisma.user.findUnique.mockResolvedValue({ gpsClockInEnabled: true, company: { gpsClockInEnabled: false } });
+      prisma.site.findFirst.mockResolvedValue({ id: 'site-a', companyId: 'company-a' });
+      prisma.timeEntry.create.mockResolvedValue({ id: 'entry-1' });
+
+      await service.createSelf(user, {
+        type: 'clock_in' as any,
+        source: 'gps',
+        siteId: 'site-a',
+        geoLat: 50.8,
+        geoLng: 4.35,
+      });
+
+      expect(prisma.timeEntry.create).toHaveBeenCalled();
+    });
+
     it('rejects a qr_scan_own_phone entry on a device from another company', async () => {
       prisma.siteDevice.findFirst.mockResolvedValue(null);
 
@@ -348,15 +383,15 @@ describe('TimeEntriesService', () => {
       );
     });
 
-    it('returns only users whose latest clock event is clock_in, with the since timestamp of that event', async () => {
+    it('returns only users whose latest clock event is clock_in, with the since timestamp and clock-in method of that event', async () => {
       const lastClockIn = new Date('2026-09-01T13:00:00.000Z');
-      prisma.site.findFirst.mockResolvedValue({ id: 'site-a', companyId: 'company-a' });
+      prisma.site.findFirst.mockResolvedValue({ id: 'site-a', companyId: 'company-a', geoLat: null, geoLng: null });
       prisma.timeEntry.findMany.mockResolvedValue([
-        { userId: 'user-1', type: 'clock_in', timestamp: new Date('2026-09-01T09:00:00.000Z') },
-        { userId: 'user-2', type: 'clock_in', timestamp: new Date('2026-09-01T09:00:00.000Z') },
-        { userId: 'user-2', type: 'clock_out', timestamp: new Date('2026-09-01T12:00:00.000Z') },
-        { userId: 'user-1', type: 'clock_out', timestamp: new Date('2026-09-01T12:30:00.000Z') },
-        { userId: 'user-1', type: 'clock_in', timestamp: lastClockIn },
+        { userId: 'user-1', type: 'clock_in', timestamp: new Date('2026-09-01T09:00:00.000Z'), source: 'badge_scan', geoLat: null, geoLng: null },
+        { userId: 'user-2', type: 'clock_in', timestamp: new Date('2026-09-01T09:00:00.000Z'), source: 'badge_scan', geoLat: null, geoLng: null },
+        { userId: 'user-2', type: 'clock_out', timestamp: new Date('2026-09-01T12:00:00.000Z'), source: 'badge_scan', geoLat: null, geoLng: null },
+        { userId: 'user-1', type: 'clock_out', timestamp: new Date('2026-09-01T12:30:00.000Z'), source: 'badge_scan', geoLat: null, geoLng: null },
+        { userId: 'user-1', type: 'clock_in', timestamp: lastClockIn, source: 'qr_scan_own_phone', geoLat: null, geoLng: null },
       ]);
       prisma.user.findMany.mockResolvedValue([{ id: 'user-1', firstName: 'A', lastName: 'B' }]);
 
@@ -366,7 +401,60 @@ describe('TimeEntriesService', () => {
         where: { id: { in: ['user-1'] } },
         select: { id: true, firstName: true, lastName: true },
       });
-      expect(result).toEqual([{ id: 'user-1', firstName: 'A', lastName: 'B', since: lastClockIn }]);
+      expect(result).toEqual([
+        {
+          id: 'user-1',
+          firstName: 'A',
+          lastName: 'B',
+          since: lastClockIn,
+          source: 'qr_scan_own_phone',
+          geoLat: null,
+          geoLng: null,
+          distanceFromSiteMeters: null,
+        },
+      ]);
+    });
+
+    it('computes the distance from the site for a gps clock-in when both coordinates are known', async () => {
+      // ~111m plein nord du site (0.001° de latitude ≈ 111m).
+      prisma.site.findFirst.mockResolvedValue({ id: 'site-a', companyId: 'company-a', geoLat: 50.8467, geoLng: 4.3525 });
+      prisma.timeEntry.findMany.mockResolvedValue([
+        { userId: 'user-1', type: 'clock_in', timestamp: new Date(), source: 'gps', geoLat: 50.8477, geoLng: 4.3525 },
+      ]);
+      prisma.user.findMany.mockResolvedValue([{ id: 'user-1', firstName: 'A', lastName: 'B' }]);
+
+      const [result] = await service.getPresence('company-a', 'site-a');
+
+      expect(result.source).toBe('gps');
+      expect(result.geoLat).toBe(50.8477);
+      expect(result.distanceFromSiteMeters).toBeGreaterThan(90);
+      expect(result.distanceFromSiteMeters).toBeLessThan(130);
+    });
+
+    it('returns raw gps coordinates without a distance when the site has none declared', async () => {
+      prisma.site.findFirst.mockResolvedValue({ id: 'site-a', companyId: 'company-a', geoLat: null, geoLng: null });
+      prisma.timeEntry.findMany.mockResolvedValue([
+        { userId: 'user-1', type: 'clock_in', timestamp: new Date(), source: 'gps', geoLat: 50.85, geoLng: 4.35 },
+      ]);
+      prisma.user.findMany.mockResolvedValue([{ id: 'user-1', firstName: 'A', lastName: 'B' }]);
+
+      const [result] = await service.getPresence('company-a', 'site-a');
+
+      expect(result.geoLat).toBe(50.85);
+      expect(result.geoLng).toBe(4.35);
+      expect(result.distanceFromSiteMeters).toBeNull();
+    });
+
+    it('never computes a distance for a non-gps clock-in even if coordinates happen to be present', async () => {
+      prisma.site.findFirst.mockResolvedValue({ id: 'site-a', companyId: 'company-a', geoLat: 50.8467, geoLng: 4.3525 });
+      prisma.timeEntry.findMany.mockResolvedValue([
+        { userId: 'user-1', type: 'clock_in', timestamp: new Date(), source: 'badge_scan', geoLat: null, geoLng: null },
+      ]);
+      prisma.user.findMany.mockResolvedValue([{ id: 'user-1', firstName: 'A', lastName: 'B' }]);
+
+      const [result] = await service.getPresence('company-a', 'site-a');
+
+      expect(result.distanceFromSiteMeters).toBeNull();
     });
 
     it('returns an empty list without querying users when nobody is clocked in', async () => {

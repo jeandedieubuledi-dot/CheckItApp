@@ -3,11 +3,45 @@ import { View, Text, FlatList, Pressable, StyleSheet, RefreshControl, ScrollView
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, typography } from '@horaires/ui-tokens';
-import type { Site } from '@horaires/shared-types';
+import type { PresentEmployee, Site, TimeEntrySource } from '@horaires/shared-types';
 import { apiClient, useAuth } from '../services/AuthService';
 import { fonts } from '../theme';
 
-type PresentEmployee = { id: string; firstName: string; lastName: string; since: string };
+// Libellés courts affichés sous le nom pour chaque mode de pointage.
+const SOURCE_LABELS: Record<TimeEntrySource, string> = {
+  qr_scan_own_phone: 'QR',
+  badge_scan: 'Badge',
+  pin_code: 'PIN',
+  gps: 'GPS',
+  manual_by_manager: 'Saisie manuelle',
+};
+
+// Seuils de distance (mètres) — purement indicatifs pour le manager.
+const DISTANCE_WARN_METERS = 100;
+const DISTANCE_ALERT_METERS = 400;
+
+function distanceColor(distance: number): string {
+  if (distance <= DISTANCE_WARN_METERS) return colors.success;
+  if (distance <= DISTANCE_ALERT_METERS) return colors.warning;
+  return colors.danger;
+}
+
+function sourceBadge(employee: PresentEmployee): { text: string; color: string } {
+  const label = SOURCE_LABELS[employee.source] ?? employee.source;
+  if (employee.source !== 'gps') {
+    return { text: label, color: colors.textSecondary };
+  }
+  if (employee.distanceFromSiteMeters != null) {
+    return {
+      text: `${label} — à ${employee.distanceFromSiteMeters}m du site`,
+      color: distanceColor(employee.distanceFromSiteMeters),
+    };
+  }
+  if (employee.geoLat != null && employee.geoLng != null) {
+    return { text: `${label} — ${employee.geoLat.toFixed(4)}, ${employee.geoLng.toFixed(4)}`, color: colors.textSecondary };
+  }
+  return { text: label, color: colors.textSecondary };
+}
 
 function initials(firstName: string, lastName: string) {
   return `${firstName[0] ?? ''}${lastName[0] ?? ''}`.toUpperCase();
@@ -115,23 +149,27 @@ export function PresenceLiveScreen() {
         contentContainerStyle={styles.listContent}
         refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={refresh} />}
         ListEmptyComponent={<Text style={styles.empty}>Personne n'est actuellement en poste sur ce site.</Text>}
-        renderItem={({ item }) => (
-          <View style={styles.card}>
-            <View style={styles.cardAvatar}>
-              <Text style={styles.cardAvatarText}>{initials(item.firstName, item.lastName)}</Text>
+        renderItem={({ item }) => {
+          const badge = sourceBadge(item);
+          return (
+            <View style={styles.card}>
+              <View style={styles.cardAvatar}>
+                <Text style={styles.cardAvatarText}>{initials(item.firstName, item.lastName)}</Text>
+              </View>
+              <View style={styles.nameGroup}>
+                <Text style={styles.name}>
+                  {item.firstName} {item.lastName}
+                </Text>
+                <Text style={styles.since}>Depuis {sinceLabel(item.since)}</Text>
+                <Text style={[styles.sourceBadge, { color: badge.color }]}>{badge.text}</Text>
+              </View>
+              <View style={styles.durationGroup}>
+                <Text style={styles.durationValue}>{durationLabel(item.since)}</Text>
+                <Text style={styles.durationLabel}>en service</Text>
+              </View>
             </View>
-            <View style={styles.nameGroup}>
-              <Text style={styles.name}>
-                {item.firstName} {item.lastName}
-              </Text>
-              <Text style={styles.since}>Depuis {sinceLabel(item.since)}</Text>
-            </View>
-            <View style={styles.durationGroup}>
-              <Text style={styles.durationValue}>{durationLabel(item.since)}</Text>
-              <Text style={styles.durationLabel}>en service</Text>
-            </View>
-          </View>
-        )}
+          );
+        }}
       />
     </View>
   );
@@ -223,6 +261,7 @@ const styles = StyleSheet.create({
   nameGroup: { flex: 1 },
   name: { fontSize: typography.sizes.md, color: colors.textPrimary, fontWeight: '700' },
   since: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+  sourceBadge: { fontSize: 11, fontWeight: '700', marginTop: 3 },
   durationGroup: { alignItems: 'flex-end' },
   durationValue: { fontFamily: fonts.displaySemiBold, fontSize: 14, color: colors.success },
   durationLabel: { fontSize: 10.5, color: colors.textSecondary },

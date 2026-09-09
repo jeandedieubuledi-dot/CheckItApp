@@ -11,6 +11,7 @@ const TAB_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
   Availabilities: 'checkmark-circle-outline',
   PresenceLive: 'people-outline',
   ShiftApproval: 'shield-checkmark-outline',
+  Profile: 'person-outline',
 };
 
 const TAB_LABELS: Record<string, string> = {
@@ -20,6 +21,7 @@ const TAB_LABELS: Record<string, string> = {
   Availabilities: 'Dispos',
   PresenceLive: 'Présence',
   ShiftApproval: 'Échanges',
+  Profile: 'Profil',
 };
 
 const FAB_SIZE = 62;

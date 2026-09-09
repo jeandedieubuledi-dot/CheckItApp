@@ -65,6 +65,28 @@ describe('UsersService', () => {
     expect(prisma.user.update).not.toHaveBeenCalled();
   });
 
+  it('blocks updateSettings() on a user from another company before touching prisma.update', async () => {
+    prisma.user.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.updateSettings('company-a', 'user-of-company-b', { gpsClockInEnabled: false }),
+    ).rejects.toThrow(NotFoundException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('lets updateSettings() reset the GPS override to null (inherit company default)', async () => {
+    prisma.user.findFirst.mockResolvedValue({ id: 'user-1', companyId: 'company-a' });
+    prisma.user.update.mockResolvedValue({ id: 'user-1', gpsClockInEnabled: null });
+
+    await service.updateSettings('company-a', 'user-1', { gpsClockInEnabled: null });
+
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'user-1' },
+      data: { gpsClockInEnabled: null },
+      select: expect.any(Object),
+    });
+  });
+
   it('rejects invite() when the email is already used, even across companies', async () => {
     prisma.user.findUnique.mockResolvedValue({ id: 'existing-user' });
 

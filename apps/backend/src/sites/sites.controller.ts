@@ -24,7 +24,13 @@ export class SitesController {
     return this.sitesService.findAll(user.companyId);
   }
 
+  // Réservé aux managers/admins : la réponse inclut désormais les
+  // coordonnées GPS exactes des employés présents (voir TimeEntriesService,
+  // feature "visibilité du type de pointage") — jamais exposées à un
+  // simple employé, même de la même entreprise.
   @Get(':id/presence')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'manager')
   getPresence(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.timeEntriesService.getPresence(user.companyId, id);
   }
