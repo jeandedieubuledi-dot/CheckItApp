@@ -4,6 +4,7 @@ import type {
   Company,
   DeviceAuthResponse,
   DeviceTimeEntryResult,
+  GeocodeCandidate,
   PresentEmployee,
   RotatingQrCode,
   Shift,
@@ -166,6 +167,37 @@ export class ApiClient {
   // ---- Sites ----
   getSites() {
     return this.request<Site[]>('GET', '/sites');
+  }
+
+  createSite(payload: { name: string; address?: string; geoLat?: number; geoLng?: number; timezone?: string }) {
+    return this.request<Site>('POST', '/sites', payload);
+  }
+
+  updateSite(
+    siteId: string,
+    payload: Partial<{ name: string; address: string; geoLat: number; geoLng: number; timezone: string }>,
+  ) {
+    return this.request<Site>('PATCH', `/sites/${siteId}`, payload);
+  }
+
+  deleteSite(siteId: string) {
+    return this.request<void>('DELETE', `/sites/${siteId}`);
+  }
+
+  // ---- Géocodage (managers/admins) ----
+  // Adresse -> liste de coordonnées candidates, pour remplir la fiche d'un site.
+  geocodeSearch(query: string) {
+    return this.request<GeocodeCandidate[]>('GET', `/geocoding/search${toQueryString({ query })}`);
+  }
+
+  // Coordonnées -> adresse lisible, pour l'écran Présence quand le site n'a
+  // pas de coordonnées enregistrées (fallback : coordonnées brutes affichées
+  // telles quelles si le géocodage échoue).
+  geocodeReverse(lat: number, lng: number) {
+    return this.request<{ label: string | null }>(
+      'GET',
+      `/geocoding/reverse${toQueryString({ lat: String(lat), lng: String(lng) })}`,
+    );
   }
 
   // ---- Utilisateurs (annuaire de l'entreprise — noms des collègues) ----

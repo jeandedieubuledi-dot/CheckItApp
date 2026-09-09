@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet, RefreshControl, ScrollView } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,7 +26,10 @@ function distanceColor(distance: number): string {
   return colors.danger;
 }
 
-function sourceBadge(employee: PresentEmployee): { text: string; color: string } {
+// `resolvedAddress` vient du géocodage inverse (voir loadAddresses ci-dessous)
+// — affiché à la place des coordonnées brutes quand le site n'a pas de
+// coordonnées enregistrées (donc pas de distance calculable).
+function sourceBadge(employee: PresentEmployee, resolvedAddress?: string): { text: string; color: string } {
   const label = SOURCE_LABELS[employee.source] ?? employee.source;
   if (employee.source !== 'gps') {
     return { text: label, color: colors.textSecondary };
@@ -38,9 +41,16 @@ function sourceBadge(employee: PresentEmployee): { text: string; color: string }
     };
   }
   if (employee.geoLat != null && employee.geoLng != null) {
-    return { text: `${label} — ${employee.geoLat.toFixed(4)}, ${employee.geoLng.toFixed(4)}`, color: colors.textSecondary };
+    const location = resolvedAddress ?? `${employee.geoLat.toFixed(4)}, ${employee.geoLng.toFixed(4)}`;
+    return { text: `${label} — ${location}`, color: colors.textSecondary };
   }
   return { text: label, color: colors.textSecondary };
+}
+
+function addressKeyFor(employee: PresentEmployee): string | null {
+  return employee.geoLat != null && employee.geoLng != null
+    ? `${employee.geoLat.toFixed(4)},${employee.geoLng.toFixed(4)}`
+    : null;
 }
 
 function initials(firstName: string, lastName: string) {
@@ -66,6 +76,8 @@ export function PresenceLiveScreen() {
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [present, setPresent] = useState<PresentEmployee[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  // Adresses résolues par géocodage inverse, indexées par "lat,lng" arrondi.
+  const [addressLabels, setAddressLabels] = useState<Record<string, string>>({});
 
   const loadSites = useCallback(async () => {
     const siteList = await apiClient.getSites();
@@ -89,6 +101,24 @@ export function PresenceLiveScreen() {
       if (selectedSiteId) void loadPresence(selectedSiteId);
     }, [selectedSiteId, loadPresence]),
   );
+
+  // Résout en adresse lisible les pointages GPS pour lesquels aucune distance
+  // n'a pu être calculée (site sans coordonnées) — échec silencieux, retombe
+  // sur les coordonnées brutes déjà affichées par défaut.
+  useEffect(() => {
+    const toResolve = present.filter((e) => e.source === 'gps' && e.distanceFromSiteMeters == null && addressKeyFor(e));
+    for (const employee of toResolve) {
+      const key = addressKeyFor(employee)!;
+      if (key in addressLabels) continue;
+      apiClient
+        .geocodeReverse(employee.geoLat!, employee.geoLng!)
+        .then(({ label }) => {
+          if (label) setAddressLabels((prev) => ({ ...prev, [key]: label }));
+        })
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [present]);
 
   const refresh = async () => {
     if (!selectedSiteId) return;
@@ -150,7 +180,8 @@ export function PresenceLiveScreen() {
         refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={refresh} />}
         ListEmptyComponent={<Text style={styles.empty}>Personne n'est actuellement en poste sur ce site.</Text>}
         renderItem={({ item }) => {
-          const badge = sourceBadge(item);
+          const key = addressKeyFor(item);
+          const badge = sourceBadge(item, key ? addressLabels[key] : undefined);
           return (
             <View style={styles.card}>
               <View style={styles.cardAvatar}>

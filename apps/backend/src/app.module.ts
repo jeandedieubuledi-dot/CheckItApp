@@ -8,6 +8,7 @@ import { SiteDevicesModule } from './site-devices/site-devices.module';
 import { TimeEntriesModule } from './time-entries/time-entries.module';
 import { ShiftsModule } from './shifts/shifts.module';
 import { AvailabilitiesModule } from './availabilities/availabilities.module';
+import { GeocodingModule } from './geocoding/geocoding.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { AvailabilitiesModule } from './availabilities/availabilities.module';
     TimeEntriesModule,
     ShiftsModule,
     AvailabilitiesModule,
+    GeocodingModule,
   ],
 })
 export class AppModule {}

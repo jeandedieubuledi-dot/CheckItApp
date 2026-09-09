@@ -24,7 +24,10 @@ function distanceColor(distance: number): string {
   return colors.danger;
 }
 
-function sourceBadge(employee: PresentEmployee): { text: string; color: string } {
+// `resolvedAddress` vient du géocodage inverse (voir loadAddresses) —
+// affiché à la place des coordonnées brutes quand le site n'a pas de
+// coordonnées enregistrées (donc pas de distance calculable).
+function sourceBadge(employee: PresentEmployee, resolvedAddress?: string): { text: string; color: string } {
   const label = SOURCE_LABELS[employee.source] ?? employee.source;
   if (employee.source !== 'gps') {
     return { text: label, color: colors.textSecondary };
@@ -33,7 +36,8 @@ function sourceBadge(employee: PresentEmployee): { text: string; color: string }
     return { text: `${label} — à ${employee.distanceFromSiteMeters}m du site`, color: distanceColor(employee.distanceFromSiteMeters) };
   }
   if (employee.geoLat != null && employee.geoLng != null) {
-    return { text: `${label} — ${employee.geoLat.toFixed(4)}, ${employee.geoLng.toFixed(4)}`, color: colors.textSecondary };
+    const location = resolvedAddress ?? `${employee.geoLat.toFixed(4)}, ${employee.geoLng.toFixed(4)}`;
+    return { text: `${label} — ${location}`, color: colors.textSecondary };
   }
   return { text: label, color: colors.textSecondary };
 }
@@ -43,6 +47,9 @@ export function PresenceLivePage() {
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [present, setPresent] = useState<PresentEmployee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  // Adresses résolues par géocodage inverse, indexées par "lat,lng" arrondi —
+  // évite de re-résoudre la même position à chaque rafraîchissement (30s).
+  const [addressLabels, setAddressLabels] = useState<Record<string, string>>({});
 
   useEffect(() => {
     apiClient.getSites().then((list) => {
@@ -72,6 +79,26 @@ export function PresenceLivePage() {
     return () => clearInterval(interval);
   }, [selectedSiteId, loadPresence]);
 
+  // Résout en adresse lisible les pointages GPS pour lesquels aucune distance
+  // n'a pu être calculée (site sans coordonnées) — échec silencieux : en cas
+  // de souci réseau/service, l'affichage retombe simplement sur les coordonnées.
+  useEffect(() => {
+    const toResolve = present.filter(
+      (e) => e.source === 'gps' && e.distanceFromSiteMeters == null && e.geoLat != null && e.geoLng != null,
+    );
+    for (const employee of toResolve) {
+      const key = `${employee.geoLat!.toFixed(4)},${employee.geoLng!.toFixed(4)}`;
+      if (key in addressLabels) continue;
+      apiClient
+        .geocodeReverse(employee.geoLat!, employee.geoLng!)
+        .then(({ label }) => {
+          if (label) setAddressLabels((prev) => ({ ...prev, [key]: label }));
+        })
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [present]);
+
   return (
     <div>
       <div style={styles.header}>
@@ -86,7 +113,11 @@ export function PresenceLivePage() {
       ) : (
         <div style={styles.grid}>
           {present.map((employee) => {
-            const badge = sourceBadge(employee);
+            const addressKey =
+              employee.geoLat != null && employee.geoLng != null
+                ? `${employee.geoLat.toFixed(4)},${employee.geoLng.toFixed(4)}`
+                : null;
+            const badge = sourceBadge(employee, addressKey ? addressLabels[addressKey] : undefined);
             return (
               <div key={employee.id} className="card-hover" style={styles.card}>
                 <span style={styles.dot} className="live-dot" />

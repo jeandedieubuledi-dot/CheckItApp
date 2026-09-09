@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { CalendarDays, Radio, ArrowLeftRight, Users, LogOut, CalendarClock, Settings } from 'lucide-react';
+import { CalendarDays, Radio, ArrowLeftRight, Users, LogOut, CalendarClock, Settings, MapPin } from 'lucide-react';
 import { colors, gradients, spacing, radius, typography, shadows } from '@horaires/ui-tokens';
 import { useAuth } from '../services/AuthService';
 
@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { to: '/presence', label: 'Présence', icon: Radio },
   { to: '/approvals', label: 'Échanges', icon: ArrowLeftRight },
   { to: '/team', label: 'Équipe', icon: Users },
+  { to: '/sites', label: 'Sites', icon: MapPin },
   { to: '/settings', label: 'Réglages', icon: Settings },
 ];
 

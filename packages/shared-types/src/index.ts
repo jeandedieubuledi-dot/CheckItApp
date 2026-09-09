@@ -130,6 +130,14 @@ export interface RotatingQrCode {
   validUntil: string;
 }
 
+// ---- GET /geocoding/search, GET /geocoding/reverse (managers/admins) ----
+
+export interface GeocodeCandidate {
+  label: string;
+  lat: number;
+  lng: number;
+}
+
 // ---- GET /sites/:id/presence (managers/admins uniquement) ----
 
 export interface PresentEmployee {
