@@ -184,7 +184,16 @@ async function main() {
   const rangeEnd = addDays(monday, 13); // fin de la semaine prochaine
 
   const busyByDay = new Map<string, Set<string>>();
-  const futureOpenAssignments: { assignmentId: string; employeeId: string }[] = [];
+  const futureOpenAssignments: { assignmentId: string; employeeId: string; startsAt: Date; endsAt: Date }[] = [];
+  // Reflète les créneaux réellement occupés par chaque employé (hors shifts
+  // annulés) — utilisé plus bas pour ne jamais proposer, en démo, un
+  // "collègue" déjà pris sur le créneau de l'échange (sinon la validation
+  // manager échoue systématiquement avec un vrai conflit d'horaire).
+  const assignmentsByEmployee = new Map<string, { startsAt: Date; endsAt: Date }[]>();
+  function hasOverlap(employeeId: string, startsAt: Date, endsAt: Date) {
+    const slots = assignmentsByEmployee.get(employeeId) ?? [];
+    return slots.some((s) => s.startsAt < endsAt && s.endsAt > startsAt);
+  }
 
   let shiftCount = 0;
   let entryCount = 0;
@@ -226,8 +235,14 @@ async function main() {
         data: { shiftId: shift.id, userId: employee.id, status: assignmentStatus },
       });
 
+      if (assignmentStatus !== 'cancelled') {
+        const slots = assignmentsByEmployee.get(employee.id) ?? [];
+        slots.push({ startsAt, endsAt });
+        assignmentsByEmployee.set(employee.id, slots);
+      }
+
       if (isFuture && assignmentStatus === 'assigned') {
-        futureOpenAssignments.push({ assignmentId: assignment.id, employeeId: employee.id });
+        futureOpenAssignments.push({ assignmentId: assignment.id, employeeId: employee.id, startsAt, endsAt });
       }
 
       if (isPast && assignmentStatus === 'confirmed') {
@@ -264,9 +279,20 @@ async function main() {
     offerCount++;
   }
 
-  // Deux échanges déjà acceptés par un collègue, en attente de validation manager.
+  // Deux échanges déjà acceptés par un collègue, en attente de validation
+  // manager — le collègue est choisi parmi ceux qui n'ont pas déjà un shift
+  // sur ce créneau, sinon la validation manager échouerait systématiquement
+  // avec un vrai conflit d'horaire (409), ce qui donnait l'impression d'un
+  // bouton "Valider" cassé sur l'écran Approvals.
   for (const target of pool.splice(0, 2)) {
-    const colleague = pick(employees.filter((e) => e.id !== target.employeeId));
+    const candidates = employees.filter(
+      (e) => e.id !== target.employeeId && !hasOverlap(e.id, target.startsAt, target.endsAt),
+    );
+    const colleague = pick(candidates.length > 0 ? candidates : employees.filter((e) => e.id !== target.employeeId));
+    const slots = assignmentsByEmployee.get(colleague.id) ?? [];
+    slots.push({ startsAt: target.startsAt, endsAt: target.endsAt });
+    assignmentsByEmployee.set(colleague.id, slots);
+
     await prisma.shiftAssignment.update({ where: { id: target.assignmentId }, data: { status: 'swap_pending' } });
     await prisma.shiftOffer.create({
       data: {

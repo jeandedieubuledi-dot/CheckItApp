@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import { colors, spacing, radius, typography, shadows } from '@horaires/ui-tokens';
 import type { Shift, ShiftAssignment, ShiftOffer, Site, User } from '@horaires/shared-types';
+import { ApiError } from '@horaires/api-client';
 import { apiClient } from '../services/AuthService';
+import { Dialog } from '../components/Dialog';
 
 type PendingOffer = { id: string; shift: Shift; assignment: ShiftAssignment; offer: ShiftOffer };
 
@@ -12,6 +14,7 @@ export function ShiftApprovalPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const [shifts, userList, siteList] = await Promise.all([
@@ -45,6 +48,14 @@ export function ShiftApprovalPage() {
     try {
       await apiClient.approveShiftOffer(offerId);
       await load();
+    } catch (err) {
+      // Le backend refuse (409) si le collègue qui a accepté l'échange a
+      // depuis récupéré un shift qui chevauche celui-ci dans le temps — sans
+      // ce catch, l'erreur passait inaperçue et le bouton semblait ne rien
+      // faire pour la ligne concernée.
+      setErrorMessage(
+        err instanceof ApiError ? err.message : "Impossible de valider cet échange",
+      );
     } finally {
       setBusyId(null);
     }
@@ -107,6 +118,15 @@ export function ShiftApprovalPage() {
         </table>
         </div>
       )}
+
+      <Dialog
+        open={errorMessage !== null}
+        variant="warning"
+        title="Validation impossible"
+        message={errorMessage ?? ''}
+        cancelLabel="Compris"
+        onClose={() => setErrorMessage(null)}
+      />
     </div>
   );
 }
