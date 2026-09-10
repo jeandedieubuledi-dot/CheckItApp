@@ -17,7 +17,13 @@ describe('ShiftsService', () => {
       update: jest.Mock;
       deleteMany: jest.Mock;
     };
-    shiftOffer: { create: jest.Mock; findFirst: jest.Mock; update: jest.Mock; deleteMany: jest.Mock };
+    shiftOffer: {
+      create: jest.Mock;
+      findFirst: jest.Mock;
+      findMany: jest.Mock;
+      update: jest.Mock;
+      deleteMany: jest.Mock;
+    };
     $transaction: jest.Mock;
   };
 
@@ -40,7 +46,13 @@ describe('ShiftsService', () => {
         update: jest.fn(),
         deleteMany: jest.fn(),
       },
-      shiftOffer: { create: jest.fn(), findFirst: jest.fn(), update: jest.fn(), deleteMany: jest.fn() },
+      shiftOffer: {
+        create: jest.fn(),
+        findFirst: jest.fn(),
+        findMany: jest.fn(),
+        update: jest.fn(),
+        deleteMany: jest.fn(),
+      },
       $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
     };
 
@@ -210,7 +222,10 @@ describe('ShiftsService', () => {
     // Par défaut, l'employé est disponible toute la journée — les tests
     // ciblant une autre règle (chevauchement, entreprise...) n'ont pas à se
     // soucier de la disponibilité ; les tests dédiés ci-dessous l'écrasent.
+    // Site en UTC par défaut pour que les heures des mocks se lisent
+    // directement ; les tests de fuseau ci-dessous renvoient un autre tz.
     beforeEach(() => {
+      prisma.site.findFirst.mockResolvedValue({ timezone: 'UTC' });
       prisma.availability.findFirst.mockResolvedValue({
         isAvailable: true,
         startTime: '00:00',
@@ -374,6 +389,122 @@ describe('ShiftsService', () => {
       );
       expect(prisma.availability.findFirst).toHaveBeenCalledTimes(1);
       expect(prisma.shiftAssignment.create).not.toHaveBeenCalled();
+    });
+
+    // ---- Comparaison disponibilité <-> shift dans le fuseau du site ----
+    // Le shift est stocké en UTC, l'Availability déclarée en heure locale.
+
+    it('compares against the site timezone, not UTC, when checking declared hours', async () => {
+      // 06:00–14:00 UTC = 08:00–16:00 heure de Bruxelles (CEST, UTC+2).
+      prisma.shift.findFirst.mockResolvedValue({
+        id: 'shift-tz',
+        siteId: 'site-1',
+        startsAt: new Date('2026-06-01T06:00:00.000Z'),
+        endsAt: new Date('2026-06-01T14:00:00.000Z'),
+        assignments: [],
+      });
+      prisma.site.findFirst.mockResolvedValue({ timezone: 'Europe/Brussels' });
+      prisma.user.findFirst.mockResolvedValue({ id: 'user-1' });
+      prisma.availability.findFirst.mockResolvedValue({
+        isAvailable: true,
+        startTime: '08:00',
+        endTime: '16:00',
+        specificDate: null,
+      });
+      prisma.shiftAssignment.findFirst.mockResolvedValue(null);
+      prisma.shiftAssignment.create.mockResolvedValue({ id: 'assignment-tz' });
+
+      // Sans conversion de fuseau, 06:00 UTC < 08:00 aurait été rejeté à tort.
+      await service.assign('company-a', 'shift-tz', { userId: 'user-1' });
+
+      expect(prisma.shiftAssignment.create).toHaveBeenCalledWith({
+        data: { shiftId: 'shift-tz', userId: 'user-1', status: 'assigned' },
+      });
+    });
+
+    it('still blocks a shift that runs past the declared hours once converted to the site timezone', async () => {
+      // 08:00–16:00 UTC = 10:00–18:00 heure de Bruxelles ; dispo jusqu'à 16:00 locale.
+      prisma.shift.findFirst.mockResolvedValue({
+        id: 'shift-tz',
+        siteId: 'site-1',
+        startsAt: new Date('2026-06-01T08:00:00.000Z'),
+        endsAt: new Date('2026-06-01T16:00:00.000Z'),
+        assignments: [],
+      });
+      prisma.site.findFirst.mockResolvedValue({ timezone: 'Europe/Brussels' });
+      prisma.user.findFirst.mockResolvedValue({ id: 'user-1' });
+      prisma.availability.findFirst.mockResolvedValue({
+        isAvailable: true,
+        startTime: '08:00',
+        endTime: '16:00',
+        specificDate: null,
+      });
+
+      // Sans conversion, 16:00 UTC <= 16:00 aurait été accepté à tort.
+      await expect(service.assign('company-a', 'shift-tz', { userId: 'user-1' })).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.shiftAssignment.create).not.toHaveBeenCalled();
+    });
+
+    it('looks up the recurring availability for the site-local weekday of an evening shift', async () => {
+      // 23:00 UTC dimanche 7 juin = 01:00 lundi 8 juin heure de Bruxelles.
+      prisma.shift.findFirst.mockResolvedValue({
+        id: 'shift-night',
+        siteId: 'site-1',
+        startsAt: new Date('2026-06-07T23:00:00.000Z'),
+        endsAt: new Date('2026-06-08T02:00:00.000Z'),
+        assignments: [],
+      });
+      prisma.site.findFirst.mockResolvedValue({ timezone: 'Europe/Brussels' });
+      prisma.user.findFirst.mockResolvedValue({ id: 'user-1' });
+      prisma.availability.findFirst.mockResolvedValue(null); // -> ConflictException
+
+      await expect(service.assign('company-a', 'shift-night', { userId: 'user-1' })).rejects.toThrow(
+        ConflictException,
+      );
+
+      // lundi = 0 (heure locale), et pas dimanche = 6 (date UTC).
+      expect(prisma.availability.findFirst).toHaveBeenLastCalledWith({
+        where: { userId: 'user-1', dayOfWeek: 0, specificDate: null },
+      });
+    });
+  });
+
+  describe('listOpenOffers', () => {
+    it('returns other colleagues\' open offers in the company, mapped for the marketplace', async () => {
+      prisma.shiftOffer.findMany.mockResolvedValue([
+        {
+          id: 'offer-1',
+          offeredBy: 'colleague-2',
+          createdAt: new Date('2026-09-01T10:00:00.000Z'),
+          shiftAssignment: {
+            shiftId: 'shift-9',
+            shift: { id: 'shift-9', siteId: 'site-1', startsAt: 'x', endsAt: 'y' },
+          },
+        },
+      ]);
+
+      const result = await service.listOpenOffers('company-a', 'user-1');
+
+      expect(prisma.shiftOffer.findMany).toHaveBeenCalledWith({
+        where: {
+          status: 'open',
+          offeredBy: { not: 'user-1' },
+          shiftAssignment: { shift: { site: { companyId: 'company-a' } } },
+        },
+        include: { shiftAssignment: { include: { shift: true } } },
+        orderBy: { createdAt: 'asc' },
+      });
+      expect(result).toEqual([
+        {
+          id: 'offer-1',
+          shiftId: 'shift-9',
+          shift: { id: 'shift-9', siteId: 'site-1', startsAt: 'x', endsAt: 'y' },
+          offeredBy: 'colleague-2',
+          createdAt: new Date('2026-09-01T10:00:00.000Z'),
+        },
+      ]);
     });
   });
 

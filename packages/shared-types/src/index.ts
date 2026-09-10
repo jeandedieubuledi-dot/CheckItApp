@@ -91,6 +91,16 @@ export interface ShiftOffer {
   requiresManagerApproval: boolean;
 }
 
+// ---- GET /shift-offers : Marché de shifts (offres ouvertes de toute
+// l'entreprise, sauf celles de l'appelant) ----
+export interface OpenShiftOffer {
+  id: string; // id de l'offre — à passer à acceptShiftOffer
+  shiftId: string;
+  shift: Shift;
+  offeredBy: string; // id de l'employé qui a proposé le shift
+  createdAt: string;
+}
+
 export interface Availability {
   id: string;
   userId: string;

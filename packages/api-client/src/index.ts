@@ -5,6 +5,7 @@ import type {
   DeviceAuthResponse,
   DeviceTimeEntryResult,
   GeocodeCandidate,
+  OpenShiftOffer,
   PresentEmployee,
   RotatingQrCode,
   Shift,
@@ -290,6 +291,12 @@ export class ApiClient {
 
   assignShift(shiftId: string, userId: string) {
     return this.request<ShiftAssignment>('POST', `/shifts/${shiftId}/assign`, { userId });
+  }
+
+  // Marché de shifts : offres d'échange ouvertes des collègues (jamais les
+  // siennes). Séparé de getShifts, qui ne renvoie que les shifts de l'employé.
+  getOpenShiftOffers() {
+    return this.request<OpenShiftOffer[]>('GET', '/shift-offers');
   }
 
   offerShiftAssignment(assignmentId: string) {
