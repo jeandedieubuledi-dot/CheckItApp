@@ -154,6 +154,6 @@ const styles = StyleSheet.create({
   },
   pinButtonText: { color: colors.surface, fontWeight: '700', fontSize: typography.sizes.md },
   link: { color: colors.textSecondary, fontSize: typography.sizes.sm },
-  overlay: { ...StyleSheet.absoluteFillObject, padding: spacing.xl },
+  overlay: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, padding: spacing.xl },
   fill: { flex: 1 },
 });
