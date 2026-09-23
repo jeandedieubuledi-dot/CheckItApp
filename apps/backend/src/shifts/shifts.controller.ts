@@ -27,6 +27,15 @@ export class ShiftsController {
     return this.shiftsService.findOne(user.companyId, id);
   }
 
+  // Collection des offres ouvertes visibles pour l'appelant — le marché
+  // d'échange (checkin-mobile). Distinct de GET /shifts : ici on voit
+  // volontairement des shifts assignés à d'autres employés, mais seulement
+  // ceux avec une offre ouverte (voir ShiftsService.findMarketplaceOffers).
+  @Get('shift-offers')
+  findMarketplaceOffers(@CurrentUser() user: AuthenticatedUser) {
+    return this.shiftsService.findMarketplaceOffers(user);
+  }
+
   // Écriture réservée en pratique au client web-manager (choix produit, pas
   // une restriction API — un manager reste autorisé quel que soit le client).
   @Post('shifts')

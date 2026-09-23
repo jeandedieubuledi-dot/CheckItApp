@@ -259,6 +259,13 @@ export class ApiClient {
     return this.request<Shift[]>('GET', `/shifts${toQueryString(params)}`);
   }
 
+  // Marché d'échange : shifts assignés à d'AUTRES employés mais avec une
+  // offre ouverte — seul cas où GET /shifts ne suffit pas (il ne renvoie
+  // jamais que les shifts de l'appelant lui-même, voir CLAUDE.md).
+  getMarketplaceOffers() {
+    return this.request<Shift[]>('GET', '/shift-offers');
+  }
+
   // Écriture réservée en pratique à web-manager (choix produit — un manager
   // reste autorisé par son rôle quel que soit le client, voir CLAUDE.md).
   createShift(payload: {

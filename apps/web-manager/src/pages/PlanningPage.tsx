@@ -8,26 +8,41 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
-import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Send } from 'lucide-react';
 import { colors, spacing, radius, typography, shadows } from '@horaires/ui-tokens';
-import type { Shift, Site, User } from '@horaires/shared-types';
+import type { Availability, Shift, Site, User } from '@horaires/shared-types';
 import { ApiError } from '@horaires/api-client';
 import { apiClient } from '../services/AuthService';
 import { SiteSelect } from '../components/SiteSelect';
-import { DayColumn } from '../components/DayColumn';
-import { EmployeeChip } from '../components/EmployeeChip';
+import { PlanningGridCell } from '../components/PlanningGridCell';
+import { EmployeeRowHeader } from '../components/EmployeeRowHeader';
+import { ShiftTemplateCard } from '../components/ShiftTemplateCard';
 import { Dialog } from '../components/Dialog';
 import { MonthCalendar } from '../components/MonthCalendar';
 import { EditShiftDialog } from '../components/EditShiftDialog';
-import { startOfWeek, addDays, startOfMonth, addMonths, toLocalInputValue } from '../lib/date';
+import {
+  startOfWeek,
+  addDays,
+  startOfMonth,
+  addMonths,
+  durationMinutes,
+  durationMinutesFromTimeRange,
+  combineDateAndTime,
+  formatDurationLabel,
+  toHHmm,
+  WEEKDAY_LABELS_FR,
+} from '../lib/date';
+import { getShiftPalette } from '../lib/shiftColor';
+import { getUnavailabilityInfo } from '../lib/availability';
+import { loadShiftTemplates, saveShiftTemplates, type ShiftTemplate } from '../lib/shiftTemplates';
 
 type ViewMode = 'week' | 'month';
+type WeekScope = 'week' | 'day';
 
 type DragPayload =
-  | { type: 'employee'; userId: string }
-  | { type: 'shift'; shiftId: string; startsAt: string; endsAt: string };
-
-type DropPayload = { type: 'shift'; shiftId: string } | { type: 'day'; date: string };
+  | { type: 'shift'; shiftId: string; startsAt: string; endsAt: string }
+  | { type: 'template'; templateId: string; startTime: string; endTime: string; roleNeeded?: string };
+type DropPayload = { type: 'cell'; date: string; employeeId: string | null };
 
 // SEUL endroit de tout le produit où on peut créer/éditer des horaires
 // (voir CLAUDE.md — choix produit, pas une restriction API).
@@ -35,16 +50,21 @@ export function PlanningPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [users, setUsers] = useState<User[]>([]);
+  const [availabilities, setAvailabilities] = useState<Availability[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('week');
+  const [weekScope, setWeekScope] = useState<WeekScope>('week');
+  const [selectedDay, setSelectedDay] = useState(() => new Date());
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
   const [monthAnchor, setMonthAnchor] = useState(() => startOfMonth(new Date()));
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  const [startsAt, setStartsAt] = useState(() => toLocalInputValue(addDays(startOfWeek(new Date()), 1)));
-  const [endsAt, setEndsAt] = useState('');
-  const [roleNeeded, setRoleNeeded] = useState('');
-  const [isCreating, setIsCreating] = useState(false);
+  // Modèles de shift réutilisables ("16h-20h") — pas de date, voir
+  // lib/shiftTemplates. Persistés en local, indépendamment du site affiché.
+  const [templates, setTemplates] = useState<ShiftTemplate[]>(() => loadShiftTemplates());
+  const [templateStartTime, setTemplateStartTime] = useState('09:00');
+  const [templateEndTime, setTemplateEndTime] = useState('17:00');
+  const [templateRole, setTemplateRole] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -52,6 +72,8 @@ export function PlanningPage() {
   const [conflictMessage, setConflictMessage] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [editingShift, setEditingShift] = useState<Shift | null>(null);
+  const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -61,15 +83,19 @@ export function PlanningPage() {
       setSelectedSiteId((current) => current ?? list[0]?.id ?? null);
     });
     apiClient.getUsers().then(setUsers);
+    // Pas de userId : vue manager, toute l'entreprise (voir
+    // AvailabilitiesService.findAll) — nécessaire pour marquer les jours
+    // indisponibles de n'importe quel employé dans la grille.
+    apiClient.getAvailabilities().then(setAvailabilities);
   }, []);
 
   const load = useCallback(async () => {
     if (!selectedSiteId) return;
     setIsLoading(true);
     try {
-      // La grille mois affiche aussi les jours de padding du mois précédent/
-      // suivant — on couvre toute la grille visible (6 semaines), pas
-      // seulement le mois calendaire, sinon ces cases paraîtraient vides à tort.
+      // On charge toute la semaine même en scope "Jour" (juste un filtrage
+      // d'affichage) — pas de refetch au moment de basculer le sélecteur.
+      // La grille mois couvre les 6 semaines visibles, padding inclus.
       const rangeStart = viewMode === 'week' ? weekStart : startOfWeek(monthAnchor);
       const rangeEnd = viewMode === 'week' ? addDays(weekStart, 7) : addDays(rangeStart, 42);
       const list = await apiClient.getShifts({
@@ -87,27 +113,32 @@ export function PlanningPage() {
     void load();
   }, [load]);
 
-  const createShift = async (e: React.FormEvent) => {
+  const createTemplate = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedSiteId || !startsAt || !endsAt) return;
-    setError(null);
-    setIsCreating(true);
-    try {
-      await apiClient.createShift({
-        siteId: selectedSiteId,
-        startsAt: new Date(startsAt).toISOString(),
-        endsAt: new Date(endsAt).toISOString(),
-        roleNeeded: roleNeeded || undefined,
-        status: 'published',
-      });
-      setEndsAt('');
-      setRoleNeeded('');
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Échec de la création');
-    } finally {
-      setIsCreating(false);
+    if (!templateStartTime || !templateEndTime) return;
+    if (templateStartTime === templateEndTime) {
+      setError('Les heures de début et de fin ne peuvent pas être identiques');
+      return;
     }
+    setError(null);
+    const next = [
+      ...templates,
+      {
+        id: crypto.randomUUID(),
+        startTime: templateStartTime,
+        endTime: templateEndTime,
+        roleNeeded: templateRole || undefined,
+      },
+    ];
+    setTemplates(next);
+    saveShiftTemplates(next);
+    setTemplateRole('');
+  };
+
+  const deleteTemplate = (templateId: string) => {
+    const next = templates.filter((t) => t.id !== templateId);
+    setTemplates(next);
+    saveShiftTemplates(next);
   };
 
   const deleteShift = (shiftId: string) => {
@@ -130,7 +161,7 @@ export function PlanningPage() {
   const duplicateShift = async (shift: Shift) => {
     // Copie non assignée, même créneau/site/rôle — pratique pour ouvrir un
     // second poste sur le même horaire, ou comme point de départ avant de
-    // glisser la copie vers un autre jour.
+    // glisser la copie vers un autre jour/employé.
     setBusyId(shift.id);
     try {
       await apiClient.createShift({
@@ -161,8 +192,9 @@ export function PlanningPage() {
       await load();
     } catch (err) {
       // Le backend refuse un employé déjà sur un shift qui chevauche celui-ci
-      // dans le temps (409) — même message affiché, qu'on arrive ici par
-      // glisser-déposer ou via le menu déroulant.
+      // dans le temps (409), ou une assignation en dehors de sa disponibilité
+      // déclarée — même message affiché, qu'on arrive ici par glisser-déposer
+      // ou via le menu déroulant de secours sur la carte.
       setConflictMessage(
         err instanceof ApiError ? err.message : "Impossible d'assigner cet employé à ce shift",
       );
@@ -171,31 +203,112 @@ export function PlanningPage() {
     }
   };
 
-  const rescheduleShift = async (shiftId: string, oldStartsAt: string, oldEndsAt: string, targetDateISO: string) => {
+  // Dépose d'un shift existant sur une cellule (employé x jour) : déplace le
+  // jour si besoin, assigne l'employé si la cellule en porte un et que le
+  // shift n'a pas déjà un titulaire différent (PlanningGridCell désactive ce
+  // cas côté zone de dépôt, mais on retombe ici aussi par le menu déroulant).
+  const moveShift = async (
+    shiftId: string,
+    oldStartsAt: string,
+    oldEndsAt: string,
+    targetDateISO: string,
+    targetEmployeeId: string | null,
+  ) => {
+    const shift = shifts.find((s) => s.id === shiftId);
+    const currentAssigneeId = shift?.assignments?.[0]?.userId ?? null;
+
     const oldStart = new Date(oldStartsAt);
     const oldEnd = new Date(oldEndsAt);
     const targetDate = new Date(targetDateISO);
-
-    // Delta en jours calendaires entre l'ancienne et la nouvelle date, heure
-    // du shift conservée (on déplace le jour, pas l'horaire).
     const oldDay = new Date(oldStart.getFullYear(), oldStart.getMonth(), oldStart.getDate());
     const newDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate());
-    const diff = Math.round((newDay.getTime() - oldDay.getTime()) / 86400000);
-    if (diff === 0) return;
+    const dayDiff = Math.round((newDay.getTime() - oldDay.getTime()) / 86400000);
+
+    if (dayDiff === 0 && (targetEmployeeId === null || targetEmployeeId === currentAssigneeId)) return;
 
     setBusyId(shiftId);
     try {
-      await apiClient.updateShift(shiftId, {
-        startsAt: addDays(oldStart, diff).toISOString(),
-        endsAt: addDays(oldEnd, diff).toISOString(),
-      });
+      if (dayDiff !== 0) {
+        await apiClient.updateShift(shiftId, {
+          startsAt: addDays(oldStart, dayDiff).toISOString(),
+          endsAt: addDays(oldEnd, dayDiff).toISOString(),
+        });
+      }
+      if (targetEmployeeId && targetEmployeeId !== currentAssigneeId) {
+        await apiClient.assignShift(shiftId, targetEmployeeId);
+      }
       await load();
     } catch (err) {
-      setConflictMessage(
-        err instanceof ApiError ? err.message : 'Impossible de déplacer ce shift',
-      );
+      setConflictMessage(err instanceof ApiError ? err.message : 'Impossible de déplacer ce shift');
     } finally {
       setBusyId(null);
+    }
+  };
+
+  // Dépose d'un modèle (sans date) sur une cellule : crée le vrai shift daté
+  // à ce jour-là, et l'assigne dans le même geste si déposé sur la ligne
+  // d'un employé.
+  const placeTemplate = async (
+    template: { startTime: string; endTime: string; roleNeeded?: string },
+    targetDateISO: string,
+    targetEmployeeId: string | null,
+  ) => {
+    if (!selectedSiteId) return;
+    const targetDate = new Date(targetDateISO);
+    const startsAt = combineDateAndTime(targetDate, template.startTime);
+    const minutes = durationMinutesFromTimeRange(template.startTime, template.endTime);
+    const endsAt = new Date(startsAt.getTime() + minutes * 60000);
+
+    setError(null);
+    try {
+      // Brouillon par défaut : le manager travaille et assigne le shift
+      // avant de le publier explicitement (voir publishShift/publishAllDrafts)
+      // — invisible pour l'employé tant qu'il ne l'est pas (ShiftsService.findAll).
+      const created = await apiClient.createShift({
+        siteId: selectedSiteId,
+        startsAt: startsAt.toISOString(),
+        endsAt: endsAt.toISOString(),
+        roleNeeded: template.roleNeeded,
+        status: 'draft',
+      });
+      if (targetEmployeeId) {
+        try {
+          await apiClient.assignShift(created.id, targetEmployeeId);
+        } catch (err) {
+          setConflictMessage(
+            err instanceof ApiError ? err.message : "Impossible d'assigner cet employé à ce shift",
+          );
+        }
+      }
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Échec de la création du shift');
+    }
+  };
+
+  const publishShift = async (shiftId: string) => {
+    setBusyId(shiftId);
+    try {
+      await apiClient.updateShift(shiftId, { status: 'published' });
+      await load();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // Publie en une fois tous les brouillons de la semaine chargée (pas
+  // seulement ceux du jour affiché en scope "Jour") — le workflow visé est
+  // "on construit toute la semaine en brouillon, puis on publie le tout".
+  const publishAllDrafts = async () => {
+    const draftIds = shifts.filter((s) => s.status === 'draft').map((s) => s.id);
+    setPublishConfirmOpen(false);
+    if (draftIds.length === 0) return;
+    setIsPublishing(true);
+    try {
+      await Promise.all(draftIds.map((id) => apiClient.updateShift(id, { status: 'published' })));
+      await load();
+    } finally {
+      setIsPublishing(false);
     }
   };
 
@@ -210,17 +323,13 @@ export function PlanningPage() {
 
     const activeData = active.data.current as DragPayload;
     const overData = over.data.current as DropPayload;
+    if (overData.type !== 'cell') return;
 
-    if (activeData.type === 'employee' && overData.type === 'shift') {
-      void assignEmployee(overData.shiftId, activeData.userId);
-    } else if (activeData.type === 'shift' && overData.type === 'day') {
-      void rescheduleShift(activeData.shiftId, activeData.startsAt, activeData.endsAt, overData.date);
+    if (activeData.type === 'shift') {
+      void moveShift(activeData.shiftId, activeData.startsAt, activeData.endsAt, overData.date, overData.employeeId);
+    } else if (activeData.type === 'template') {
+      void placeTemplate(activeData, overData.date, overData.employeeId);
     }
-  };
-
-  const userName = (userId: string) => {
-    const u = users.find((candidate) => candidate.id === userId);
-    return u ? `${u.firstName} ${u.lastName}` : userId;
   };
 
   // Vue mois = aperçu ; cliquer un shift bascule sur la semaine correspondante,
@@ -228,10 +337,47 @@ export function PlanningPage() {
   const jumpToShiftWeek = (shift: Shift) => {
     setWeekStart(startOfWeek(new Date(shift.startsAt)));
     setViewMode('week');
+    setWeekScope('week');
   };
 
   const employees = users.filter((u) => u.role === 'employee');
-  const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+  const allDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+  const days = weekScope === 'day' ? [selectedDay] : allDays;
+
+  // Seul un shift déjà assigné restreint la cellule cible (pas de
+  // ré-assignation par glisser-déposer, le backend ne l'expose pas) — un
+  // modèle ou un shift encore libre peut toujours être déposé.
+  const blockedAssigneeId =
+    activeDrag?.type === 'shift'
+      ? shifts.find((s) => s.id === activeDrag.shiftId)?.assignments?.[0]?.userId ?? null
+      : null;
+
+  // Horaire (HH:mm, sans date) de l'élément en cours de glisser-déposer —
+  // recombiné avec la date de chaque cellule (voir PlanningGridCell) pour
+  // savoir si l'employé de la ligne est disponible pour CE créneau précis,
+  // pas juste "ce jour-là" (une indisponibilité partielle ne bloque pas
+  // toute la journée).
+  const draggedTimeRange =
+    activeDrag?.type === 'shift'
+      ? { startTime: toHHmm(activeDrag.startsAt), endTime: toHHmm(activeDrag.endsAt) }
+      : activeDrag?.type === 'template'
+      ? { startTime: activeDrag.startTime, endTime: activeDrag.endTime }
+      : null;
+
+  const shiftsForDay = (date: Date) =>
+    shifts
+      .filter((s) => new Date(s.startsAt).toDateString() === date.toDateString())
+      .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+
+  const totalMinutesForEmployee = (userId: string) =>
+    allDays.reduce((total, date) => {
+      const dayTotal = shiftsForDay(date)
+        .filter((s) => (s.assignments ?? []).some((a) => a.userId === userId))
+        .reduce((sum, s) => sum + durationMinutes(s.startsAt, s.endsAt), 0);
+      return total + dayTotal;
+    }, 0);
+
+  const draftCount = shifts.filter((s) => s.status === 'draft').length;
 
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
@@ -270,6 +416,16 @@ export function PlanningPage() {
           <button className="btn btn-icon" style={styles.navButton} onClick={() => setWeekStart(addDays(weekStart, 7))}>
             <ChevronRight size={16} strokeWidth={2.5} />
           </button>
+          <button
+            className="btn btn-gradient"
+            style={styles.publishButton}
+            disabled={draftCount === 0 || isPublishing}
+            onClick={() => setPublishConfirmOpen(true)}
+            title={draftCount === 0 ? 'Aucun brouillon à publier cette semaine' : undefined}
+          >
+            <Send size={14} strokeWidth={2.5} />
+            {isPublishing ? 'Publication…' : draftCount > 0 ? `Publier ${draftCount} brouillon${draftCount > 1 ? 's' : ''}` : 'Publier'}
+          </button>
         </div>
       ) : (
         <div style={styles.weekNav}>
@@ -285,16 +441,21 @@ export function PlanningPage() {
         </div>
       )}
 
-      <form style={styles.createForm} onSubmit={createShift}>
+      <div style={styles.createForm}>
         <h2 style={styles.sectionTitle}>Nouveau shift</h2>
-        <div className="create-shift-row" style={styles.createRow}>
+        <p style={styles.hint}>
+          Définissez juste un horaire (ex: 16h-20h) — sans date. Il apparaît ci-dessous comme une carte
+          réutilisable : glissez-la sur le planning pour créer le shift à une date précise, et l'assigner si
+          vous la déposez sur la ligne d'un employé.
+        </p>
+        <form className="create-shift-row" style={styles.createRow} onSubmit={createTemplate}>
           <label style={styles.label}>
             Début
             <input
               style={styles.input}
-              type="datetime-local"
-              value={startsAt}
-              onChange={(e) => setStartsAt(e.target.value)}
+              type="time"
+              value={templateStartTime}
+              onChange={(e) => setTemplateStartTime(e.target.value)}
               required
             />
           </label>
@@ -302,9 +463,9 @@ export function PlanningPage() {
             Fin
             <input
               style={styles.input}
-              type="datetime-local"
-              value={endsAt}
-              onChange={(e) => setEndsAt(e.target.value)}
+              type="time"
+              value={templateEndTime}
+              onChange={(e) => setTemplateEndTime(e.target.value)}
               required
             />
           </label>
@@ -313,51 +474,125 @@ export function PlanningPage() {
             <input
               style={styles.input}
               placeholder="ex: Caissier"
-              value={roleNeeded}
-              onChange={(e) => setRoleNeeded(e.target.value)}
+              value={templateRole}
+              onChange={(e) => setTemplateRole(e.target.value)}
             />
           </label>
-          <button className="btn btn-gradient" style={styles.button} type="submit" disabled={isCreating || !selectedSiteId}>
+          <button className="btn btn-gradient" style={styles.button} type="submit">
             <Plus size={16} strokeWidth={2.5} />
-            Créer
+            Créer le modèle
           </button>
-        </div>
+        </form>
         {error ? <p style={styles.error}>{error}</p> : null}
-      </form>
+
+        {templates.length > 0 ? (
+          <div style={styles.templateRow}>
+            {templates.map((template) => (
+              <ShiftTemplateCard key={template.id} template={template} onDelete={deleteTemplate} />
+            ))}
+          </div>
+        ) : (
+          <p style={styles.emptyTemplates}>Aucun modèle pour l'instant — créez-en un ci-dessus.</p>
+        )}
+      </div>
 
       {viewMode === 'week' ? (
-        <div className="planning-board" style={styles.board}>
-          <aside className="planning-sidebar" style={styles.sidebar}>
-            <h2 style={styles.sectionTitle}>Équipe</h2>
-            <p style={styles.hint}>Glissez un employé sur un shift pour l'assigner.</p>
-            {employees.map((u) => (
-              <EmployeeChip key={u.id} user={u} />
-            ))}
-          </aside>
+        isLoading ? (
+          <p style={styles.muted}>Chargement…</p>
+        ) : (
+          <div className="planning-grid-wrapper" style={styles.gridWrapper}>
+            <div
+              className="planning-grid"
+              style={{ ...styles.grid, gridTemplateColumns: `220px repeat(${days.length}, minmax(160px, 1fr))` }}
+            >
+              {/* Ligne d'en-tête : sélecteur Semaine/Jour + un en-tête par jour affiché */}
+              <div style={styles.cornerCell}>
+                <select
+                  style={styles.scopeSelect}
+                  value={weekScope}
+                  onChange={(e) => {
+                    const next = e.target.value as WeekScope;
+                    if (next === 'day') setSelectedDay((d) => (allDays.some((day) => day.toDateString() === d.toDateString()) ? d : weekStart));
+                    setWeekScope(next);
+                  }}
+                >
+                  <option value="week">Semaine</option>
+                  <option value="day">Jour</option>
+                </select>
+                {weekScope === 'day' ? (
+                  <div style={styles.dayNav}>
+                    <button className="btn btn-icon" style={styles.dayNavButton} onClick={() => setSelectedDay((d) => addDays(d, -1))}>
+                      <ChevronLeft size={13} strokeWidth={2.5} />
+                    </button>
+                    <button className="btn btn-icon" style={styles.dayNavButton} onClick={() => setSelectedDay((d) => addDays(d, 1))}>
+                      <ChevronRight size={13} strokeWidth={2.5} />
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+              {days.map((date) => {
+                const isToday = new Date().toDateString() === date.toDateString();
+                const weekdayIndex = weekScope === 'day' ? (date.getDay() + 6) % 7 : days.indexOf(date);
+                return (
+                  <div key={`head-${date.toISOString()}`} style={{ ...styles.dayHeaderCell, ...(isToday ? styles.dayHeaderCellToday : {}) }}>
+                    <span style={styles.weekday}>{WEEKDAY_LABELS_FR[weekdayIndex]}</span>
+                    <span style={styles.dayNumber}>{date.getDate()}</span>
+                  </div>
+                );
+              })}
 
-          {isLoading ? (
-            <p style={styles.muted}>Chargement…</p>
-          ) : (
-            <div className="planning-grid" style={styles.grid}>
+              {/* Ligne "Shifts disponibles" : pool non assigné, vert menthe très pâle */}
+              <div style={styles.poolLabelCell}>Shifts disponibles</div>
               {days.map((date) => (
-                <DayColumn
-                  key={date.toISOString()}
+                <PlanningGridCell
+                  key={`pool-${date.toISOString()}`}
                   date={date}
-                  shifts={shifts
-                    .filter((s) => new Date(s.startsAt).toDateString() === date.toDateString())
-                    .sort((a, b) => a.startsAt.localeCompare(b.startsAt))}
+                  employeeId={null}
+                  mint
+                  shifts={shiftsForDay(date).filter((s) => (s.assignments ?? []).length === 0)}
+                  dayShifts={shiftsForDay(date)}
                   employees={employees}
-                  userName={userName}
+                  availabilities={availabilities}
                   onDeleteShift={deleteShift}
                   onDuplicateShift={duplicateShift}
                   onAssign={assignEmployee}
                   onEditShift={setEditingShift}
+                  onPublishShift={publishShift}
                   busyId={busyId}
+                  blockedAssigneeId={blockedAssigneeId}
+                  draggedTimeRange={draggedTimeRange}
                 />
               ))}
+
+              {/* Une ligne par employé */}
+              {employees.map((user) => (
+                <React.Fragment key={user.id}>
+                  <EmployeeRowHeader user={user} totalMinutes={totalMinutesForEmployee(user.id)} />
+                  {days.map((date) => (
+                    <PlanningGridCell
+                      key={`${user.id}-${date.toISOString()}`}
+                      date={date}
+                      employeeId={user.id}
+                      shifts={shiftsForDay(date).filter((s) => (s.assignments ?? []).some((a) => a.userId === user.id))}
+                      dayShifts={shiftsForDay(date)}
+                      employees={employees}
+                      availabilities={availabilities}
+                      onDeleteShift={deleteShift}
+                      onDuplicateShift={duplicateShift}
+                      onAssign={assignEmployee}
+                      onEditShift={setEditingShift}
+                      onPublishShift={publishShift}
+                      busyId={busyId}
+                      blockedAssigneeId={blockedAssigneeId}
+                      draggedTimeRange={draggedTimeRange}
+                      unavailabilityInfo={getUnavailabilityInfo(availabilities, user.id, date)}
+                    />
+                  ))}
+                </React.Fragment>
+              ))}
             </div>
-          )}
-        </div>
+          </div>
+        )
       ) : isLoading ? (
         <p style={styles.muted}>Chargement…</p>
       ) : (
@@ -365,11 +600,21 @@ export function PlanningPage() {
       )}
 
       <DragOverlay>
-        {activeDrag?.type === 'employee' ? (
-          <div style={styles.overlayChip}>{userName(activeDrag.userId)}</div>
-        ) : activeDrag?.type === 'shift' ? (
-          <div style={styles.overlayChip}>
-            {new Date(activeDrag.startsAt).toLocaleTimeString('fr-BE', { hour: '2-digit', minute: '2-digit' })}
+        {activeDrag?.type === 'shift' ? (
+          <div style={{ ...styles.overlayChip, ...getShiftPalette(activeDrag.shiftId) }}>
+            <strong>
+              {new Date(activeDrag.startsAt).toLocaleTimeString('fr-BE', { hour: '2-digit', minute: '2-digit' })}
+              {' - '}
+              {new Date(activeDrag.endsAt).toLocaleTimeString('fr-BE', { hour: '2-digit', minute: '2-digit' })}
+            </strong>
+            <span>{formatDurationLabel(durationMinutes(activeDrag.startsAt, activeDrag.endsAt))}</span>
+          </div>
+        ) : activeDrag?.type === 'template' ? (
+          <div style={{ ...styles.overlayChip, ...getShiftPalette(activeDrag.templateId) }}>
+            <strong>
+              {activeDrag.startTime} - {activeDrag.endTime}
+            </strong>
+            <span>{formatDurationLabel(durationMinutesFromTimeRange(activeDrag.startTime, activeDrag.endTime))}</span>
           </div>
         ) : null}
       </DragOverlay>
@@ -392,6 +637,17 @@ export function PlanningPage() {
         cancelLabel="Annuler"
         onConfirm={confirmDeleteShift}
         onClose={() => setDeleteTarget(null)}
+      />
+
+      <Dialog
+        open={publishConfirmOpen}
+        variant="info"
+        title="Publier les brouillons ?"
+        message={`${draftCount} shift${draftCount > 1 ? 's' : ''} en brouillon deviendront visibles pour les employés assignés.`}
+        confirmLabel="Publier"
+        cancelLabel="Annuler"
+        onConfirm={publishAllDrafts}
+        onClose={() => setPublishConfirmOpen(false)}
       />
 
       <EditShiftDialog
@@ -440,6 +696,19 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
   },
   weekLabel: { fontWeight: 600, color: colors.textPrimary },
+  publishButton: {
+    marginLeft: 'auto',
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.xs,
+    padding: `${spacing.sm}px ${spacing.md}px`,
+    borderRadius: radius.md,
+    border: 'none',
+    color: colors.surface,
+    fontWeight: 600,
+    fontSize: typography.sizes.sm,
+    cursor: 'pointer',
+  },
   sectionTitle: { fontSize: typography.sizes.md, fontWeight: 700, color: colors.textPrimary, margin: 0, marginBottom: spacing.sm },
   createForm: {
     backgroundColor: colors.surface,
@@ -448,6 +717,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: `1px solid ${colors.border}`,
     marginBottom: spacing.xl,
   },
+  hint: { fontSize: typography.sizes.xs, color: colors.textSecondary, marginTop: 0, marginBottom: spacing.md },
   createRow: { display: 'flex', gap: spacing.md, flexWrap: 'wrap', alignItems: 'flex-end' },
   label: { display: 'flex', flexDirection: 'column', gap: 4, fontSize: typography.sizes.xs, color: colors.textSecondary },
   input: {
@@ -470,24 +740,81 @@ const styles: Record<string, React.CSSProperties> = {
   },
   error: { color: colors.danger, fontSize: typography.sizes.sm, marginTop: spacing.sm },
   muted: { color: colors.textSecondary },
-  board: { display: 'flex', gap: spacing.lg, alignItems: 'flex-start' },
-  sidebar: {
-    width: 220,
-    flexShrink: 0,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
+  templateRow: { display: 'flex', gap: spacing.sm, flexWrap: 'wrap', marginTop: spacing.md },
+  emptyTemplates: { fontSize: typography.sizes.xs, color: colors.textSecondary, fontStyle: 'italic', marginTop: spacing.md, marginBottom: 0 },
+  gridWrapper: {
     border: `1px solid ${colors.border}`,
-    padding: spacing.md,
+    borderRadius: radius.lg,
+    overflow: 'auto',
+    backgroundColor: colors.surface,
   },
-  hint: { fontSize: typography.sizes.xs, color: colors.textSecondary, marginTop: 0, marginBottom: spacing.md },
-  grid: { flex: 1, display: 'flex', gap: spacing.sm, minWidth: 0 },
+  grid: { display: 'grid' },
+  cornerCell: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.xs,
+    padding: `${spacing.sm}px ${spacing.md}px`,
+    borderRight: `1px solid ${colors.border}`,
+    borderBottom: `1px solid ${colors.border}`,
+    backgroundColor: colors.background,
+    position: 'sticky',
+    left: 0,
+    zIndex: 2,
+  },
+  scopeSelect: {
+    fontSize: typography.sizes.xs,
+    fontWeight: 600,
+    color: colors.textPrimary,
+    border: `1px solid ${colors.border}`,
+    borderRadius: radius.sm,
+    padding: '4px 6px',
+    backgroundColor: colors.surface,
+  },
+  dayNav: { display: 'flex', gap: 2 },
+  dayNavButton: {
+    width: 22,
+    height: 22,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.full,
+    border: `1px solid ${colors.border}`,
+    backgroundColor: colors.surface,
+    color: colors.textSecondary,
+    cursor: 'pointer',
+    padding: 0,
+  },
+  dayHeaderCell: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.sm,
+    borderRight: `1px solid ${colors.border}`,
+    borderBottom: `1px solid ${colors.border}`,
+    backgroundColor: colors.background,
+  },
+  dayHeaderCellToday: { backgroundColor: colors.primaryTint },
+  weekday: { fontSize: typography.sizes.xs, color: colors.textSecondary, textTransform: 'uppercase' },
+  dayNumber: { fontSize: typography.sizes.md, fontWeight: 700, color: colors.textPrimary, fontFamily: "'Sora', sans-serif" },
+  poolLabelCell: {
+    display: 'flex',
+    alignItems: 'center',
+    padding: `${spacing.sm}px ${spacing.md}px`,
+    fontSize: typography.sizes.xs,
+    fontWeight: 700,
+    color: colors.accent,
+    borderRight: `1px solid ${colors.border}`,
+    borderBottom: `1px solid ${colors.border}`,
+    backgroundColor: colors.accentTint,
+  },
   overlayChip: {
-    backgroundColor: colors.primary,
-    color: colors.surface,
     borderRadius: radius.md,
     padding: `${spacing.xs}px ${spacing.sm}px`,
-    fontSize: typography.sizes.sm,
-    fontWeight: 600,
+    display: 'flex',
+    flexDirection: 'column',
+    fontSize: typography.sizes.xs,
+    fontWeight: 700,
     boxShadow: shadows.lg,
   },
 };

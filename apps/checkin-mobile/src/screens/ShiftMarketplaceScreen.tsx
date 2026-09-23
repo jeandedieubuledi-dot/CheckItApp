@@ -35,8 +35,14 @@ export function ShiftMarketplaceScreen() {
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const [shifts, userList, siteList] = await Promise.all([
+    // Deux sources distinctes : GET /shifts ne renvoie jamais que les shifts
+    // de l'appelant (voir CLAUDE.md) — impossible d'y trouver les offres des
+    // collègues. GET /shift-offers est le seul endroit où un employé voit
+    // des shifts qui ne sont pas les siens, volontairement limité aux
+    // offres ouvertes faites par quelqu'un d'autre.
+    const [myShifts, marketplaceShifts, userList, siteList] = await Promise.all([
       apiClient.getShifts(),
+      apiClient.getMarketplaceOffers(),
       apiClient.getUsers(),
       apiClient.getSites(),
     ]);
@@ -44,12 +50,17 @@ export function ShiftMarketplaceScreen() {
     setSites(siteList);
 
     const mine: OwnAssignment[] = [];
-    const open: OpenOffer[] = [];
-    for (const shift of shifts) {
+    for (const shift of myShifts) {
       for (const assignment of shift.assignments ?? []) {
         if (assignment.userId === user?.id && assignment.status === 'assigned') {
           mine.push({ kind: 'own', id: assignment.id, shift, assignment });
         }
+      }
+    }
+
+    const open: OpenOffer[] = [];
+    for (const shift of marketplaceShifts) {
+      for (const assignment of shift.assignments ?? []) {
         for (const offer of assignment.offers ?? []) {
           if (offer.status === 'open' && offer.offeredBy !== user?.id) {
             open.push({ kind: 'offer', id: offer.id, shift, assignment, offer });

@@ -197,8 +197,9 @@ textarea:focus-visible {
 }
 
 /* ---- Responsive : la barre latérale passe en barre du haut sous 880px
-   (tablette portrait / petite fenêtre), et le planning bascule sa grille
-   7 jours en défilement horizontal plutôt que de tout tasser. ---- */
+   (tablette portrait / petite fenêtre). Le planning gère son propre
+   débordement horizontal en permanence (voir .planning-grid-wrapper dans
+   PlanningPage), pas seulement sous ce seuil. ---- */
 @media (max-width: 880px) {
   .app-shell {
     flex-direction: column;
@@ -224,20 +225,6 @@ textarea:focus-visible {
   }
   .app-sidebar-footer-name {
     display: none;
-  }
-
-  .planning-board {
-    flex-direction: column;
-  }
-  .planning-sidebar {
-    width: 100% !important;
-  }
-  .planning-grid {
-    overflow-x: auto;
-    padding-bottom: 8px;
-  }
-  .planning-grid > * {
-    min-width: 200px;
   }
 }
 

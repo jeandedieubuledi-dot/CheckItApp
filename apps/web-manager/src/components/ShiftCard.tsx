@@ -1,49 +1,82 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useDraggable, useDroppable } from '@dnd-kit/core';
+import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
-import { Copy, X } from 'lucide-react';
+import { Copy, Send, X } from 'lucide-react';
 import { colors, spacing, radius, typography, shadows } from '@horaires/ui-tokens';
-import type { Shift, User } from '@horaires/shared-types';
+import type { Availability, Shift, User } from '@horaires/shared-types';
 import { DRAG_CURSOR, DRAG_CURSOR_ACTIVE } from '../lib/cursors';
+import { durationMinutes, formatDurationLabel } from '../lib/date';
+import { getShiftPalette } from '../lib/shiftColor';
+import { isEmployeeAvailableForShift } from '../lib/availability';
 
 type Props = {
   shift: Shift;
   employees: User[];
-  userName: (id: string) => string;
+  availabilities: Availability[];
+  // Tous les shifts de ce jour, n'importe quel employé, assignés ou non —
+  // sert à exclure du sélecteur un employé déjà occupé ce jour-là (voir
+  // assignableEmployees), pas seulement en cas de chevauchement horaire.
+  dayShifts: Shift[];
   onDelete: (id: string) => void;
   onDuplicate: (shift: Shift) => void;
   onAssign: (shiftId: string, userId: string) => void;
   onEdit: (shift: Shift) => void;
+  onPublish: (shiftId: string) => void;
   busy: boolean;
 };
 
-// Glissable (poignée = l'horaire) pour déplacer le shift vers un autre jour,
-// et zone de dépôt (toute la carte) pour y assigner un employé glissé depuis
-// la colonne Équipe. Un select reste disponible pour l'assignation au clavier.
-// Un shift = un seul employé assigné : dès qu'il y en a un, la carte
-// n'accepte plus de dépôt et le select disparaît (voir ShiftsService.assign).
-export function ShiftCard({ shift, employees, userName, onDelete, onDuplicate, onAssign, onEdit, busy }: Props) {
+// Toute la carte est la poignée de glisser-déposer : on la lâche sur une
+// cellule (employé x jour) de PlanningGrid pour l'assigner et/ou la
+// déplacer de jour. La carte n'est plus elle-même une zone de dépôt — ça,
+// c'est le rôle des cellules (voir PlanningGridCell).
+//
+// Un shift créé (voir PlanningPage.placeTemplate) démarre en brouillon —
+// visible et modifiable par le manager, invisible pour l'employé assigné
+// tant qu'il n'est pas publié (voir ShiftsService.findAll côté backend).
+// Bordure en tirets + étiquette "Brouillon" tant qu'il n'est pas publié.
+export function ShiftCard({
+  shift,
+  employees,
+  availabilities,
+  dayShifts,
+  onDelete,
+  onDuplicate,
+  onAssign,
+  onEdit,
+  onPublish,
+  busy,
+}: Props) {
   const hasAssignment = (shift.assignments ?? []).length > 0;
+  const isDraft = shift.status === 'draft';
   const [isPressed, setIsPressed] = useState(false);
+  const palette = getShiftPalette(shift.id);
 
-  const { attributes, listeners, setNodeRef: setDragRef, transform, isDragging } = useDraggable({
+  // Employés déjà occupés ce jour-là (n'importe quel autre shift, assigné
+  // n'importe quand dans la journée — pas seulement un chevauchement
+  // horaire) : on ne les propose pas dans le sélecteur, pour ne pas
+  // encourager à leur ajouter un second shift le même jour.
+  const employeeIdsBusyToday = new Set(
+    dayShifts
+      .filter((s) => s.id !== shift.id)
+      .flatMap((s) => (s.assignments ?? []).filter((a) => a.status !== 'cancelled').map((a) => a.userId)),
+  );
+
+  // Ne propose que les employés réellement disponibles sur CE créneau (pas
+  // juste "quelque part ce jour-là") — sinon le sélecteur laisse choisir un
+  // employé que ShiftsService.assign refuserait de toute façon en 409.
+  const assignableEmployees = employees.filter(
+    (e) =>
+      !employeeIdsBusyToday.has(e.id) &&
+      isEmployeeAvailableForShift(availabilities, e.id, new Date(shift.startsAt), new Date(shift.endsAt)),
+  );
+
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `shift-${shift.id}`,
     data: { type: 'shift', shiftId: shift.id, startsAt: shift.startsAt, endsAt: shift.endsAt },
   });
-  const { setNodeRef: setDropRef, isOver } = useDroppable({
-    id: `shift-drop-${shift.id}`,
-    data: { type: 'shift', shiftId: shift.id },
-    disabled: hasAssignment,
-  });
-
-  const setRefs = (node: HTMLElement | null) => {
-    setDragRef(node);
-    setDropRef(node);
-  };
 
   // Un clic ouvre l'édition, mais seulement s'il n'y a pas eu de glisser
-  // entre-temps (le double-clic est réservé au geste de glisser-déposer,
-  // pas de conflit à créer entre les deux).
+  // entre-temps (pas de conflit entre les deux gestes).
   const draggedRef = useRef(false);
   useEffect(() => {
     if (isDragging) draggedRef.current = true;
@@ -51,17 +84,19 @@ export function ShiftCard({ shift, employees, userName, onDelete, onDuplicate, o
 
   const squeezed = isPressed || isDragging;
   const translate = transform ? CSS.Translate.toString(transform) : '';
+  const minutes = durationMinutes(shift.startsAt, shift.endsAt);
 
   return (
     <div
-      ref={setRefs}
+      ref={setNodeRef}
       style={{
         ...styles.card,
+        backgroundColor: palette.bg,
+        border: isDraft ? `1.5px dashed ${colors.textSecondary}` : 'none',
         transform: `${translate} scale(${squeezed ? 0.96 : 1})`.trim(),
         transition: isDragging ? undefined : 'transform 0.15s ease',
         opacity: isDragging ? 0.4 : 1,
-        boxShadow: isOver ? `0 0 0 2px ${colors.primary}` : shadows.sm,
-        backgroundColor: isOver ? colors.primaryTint : colors.surface,
+        boxShadow: isDragging ? shadows.md : 'none',
         zIndex: isDragging ? 10 : undefined,
       }}
     >
@@ -81,37 +116,28 @@ export function ShiftCard({ shift, employees, userName, onDelete, onDuplicate, o
         }}
         onPointerCancel={() => setIsPressed(false)}
         style={{ ...styles.dragHandle, cursor: squeezed ? DRAG_CURSOR_ACTIVE : DRAG_CURSOR }}
-        title="Cliquer pour modifier, glisser pour déplacer"
+        title="Cliquer pour modifier, glisser pour déplacer/assigner"
       >
-        <span style={styles.time}>
+        {isDraft ? <span style={styles.draftTag}>Brouillon</span> : null}
+        <span style={{ ...styles.time, color: palette.text }}>
           {new Date(shift.startsAt).toLocaleTimeString('fr-BE', { hour: '2-digit', minute: '2-digit' })}
-          {' – '}
+          {' - '}
           {new Date(shift.endsAt).toLocaleTimeString('fr-BE', { hour: '2-digit', minute: '2-digit' })}
         </span>
-        {shift.roleNeeded ? <span style={styles.role}>{shift.roleNeeded}</span> : null}
+        <span style={{ ...styles.duration, color: palette.text }}>{formatDurationLabel(minutes)}</span>
+        {shift.roleNeeded ? <span style={{ ...styles.role, color: palette.text }}>{shift.roleNeeded}</span> : null}
       </div>
 
-      <div style={styles.assignments}>
-        {!hasAssignment ? (
-          <span style={styles.emptyAssign}>Non assigné — glissez un employé ici</span>
-        ) : (
-          (shift.assignments ?? []).map((a) => (
-            <span key={a.id} style={styles.assignChip}>
-              {userName(a.userId)}
-            </span>
-          ))
-        )}
-      </div>
-
-      {!hasAssignment && employees.length > 0 ? (
+      {!hasAssignment && assignableEmployees.length > 0 ? (
         <select
           style={styles.assignSelect}
           disabled={busy}
           value=""
+          onPointerDown={(e) => e.stopPropagation()}
           onChange={(e) => e.target.value && onAssign(shift.id, e.target.value)}
         >
           <option value="">+ Assigner…</option>
-          {employees.map((e) => (
+          {assignableEmployees.map((e) => (
             <option key={e.id} value={e.id}>
               {e.firstName} {e.lastName}
             </option>
@@ -120,6 +146,17 @@ export function ShiftCard({ shift, employees, userName, onDelete, onDuplicate, o
       ) : null}
 
       <div style={styles.cardActions}>
+        {isDraft ? (
+          <button
+            className="btn btn-icon"
+            style={styles.iconButton}
+            disabled={busy}
+            onClick={() => onPublish(shift.id)}
+            title="Publier ce shift (visible par l'employé assigné)"
+          >
+            <Send size={12} strokeWidth={2} />
+          </button>
+        ) : null}
         <button
           className="btn btn-icon"
           style={styles.iconButton}
@@ -147,30 +184,30 @@ const styles: Record<string, React.CSSProperties> = {
   card: {
     position: 'relative',
     borderRadius: radius.md,
-    padding: spacing.sm,
-    marginBottom: spacing.sm,
-    border: `1px solid ${colors.border}`,
+    padding: `${spacing.sm}px ${spacing.sm}px`,
+    marginBottom: spacing.xs,
   },
-  dragHandle: { touchAction: 'none', paddingRight: spacing.lg },
-  time: { fontSize: typography.sizes.sm, fontWeight: 700, color: colors.textPrimary, display: 'block' },
-  role: { fontSize: typography.sizes.xs, color: colors.textSecondary },
-  assignments: { display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: spacing.xs },
-  assignChip: {
-    fontSize: typography.sizes.xs,
-    backgroundColor: colors.background,
-    borderRadius: radius.full,
-    padding: '2px 8px',
-    color: colors.textPrimary,
+  dragHandle: { touchAction: 'none', paddingRight: spacing.lg, display: 'flex', flexDirection: 'column' },
+  draftTag: {
+    fontSize: 10,
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+    color: colors.textSecondary,
+    marginBottom: 2,
   },
-  emptyAssign: { fontSize: typography.sizes.xs, color: colors.textSecondary, fontStyle: 'italic' },
+  time: { fontSize: typography.sizes.sm, fontWeight: 700, display: 'block', lineHeight: 1.3 },
+  duration: { fontSize: typography.sizes.xs, fontWeight: 600, opacity: 0.85 },
+  role: { fontSize: 11, opacity: 0.75, marginTop: 2 },
   assignSelect: {
     marginTop: spacing.xs,
     width: '100%',
-    fontSize: typography.sizes.xs,
-    padding: 4,
+    fontSize: 11,
+    padding: 3,
     borderRadius: radius.sm,
-    border: `1px solid ${colors.border}`,
+    border: `1px solid ${colors.surface}`,
     color: colors.textSecondary,
+    backgroundColor: colors.surface,
   },
   cardActions: {
     position: 'absolute',
@@ -180,8 +217,8 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 2,
   },
   iconButton: {
-    width: 20,
-    height: 20,
+    width: 18,
+    height: 18,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',

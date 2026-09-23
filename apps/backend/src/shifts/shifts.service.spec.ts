@@ -62,15 +62,41 @@ describe('ShiftsService', () => {
       expect(call.include.assignments.where).toEqual({ userId: 'user-1' });
     });
 
-    it('lets a manager see every shift in the company, with all assignments', async () => {
+    it('hides draft shifts from an employee even if they are already assigned', async () => {
+      prisma.shift.findMany.mockResolvedValue([]);
+
+      await service.findAll({ userId: 'user-1', companyId: 'company-a', role: 'employee' }, {});
+
+      const call = prisma.shift.findMany.mock.calls[0][0];
+      expect(call.where.status).toBe('published');
+    });
+
+    it('lets a manager see every shift in the company, drafts included, with all assignments', async () => {
       prisma.shift.findMany.mockResolvedValue([]);
 
       await service.findAll({ userId: 'manager-1', companyId: 'company-a', role: 'manager' }, {});
 
       const call = prisma.shift.findMany.mock.calls[0][0];
       expect(call.where.assignments).toBeUndefined();
+      expect(call.where.status).toBeUndefined();
       expect(call.include.assignments.where).toBeUndefined();
       expect(call.where.site).toEqual({ companyId: 'company-a' });
+    });
+  });
+
+  describe('findMarketplaceOffers', () => {
+    it('scopes to the company, published shifts, and excludes the caller\'s own offers', async () => {
+      prisma.shift.findMany.mockResolvedValue([]);
+
+      await service.findMarketplaceOffers({ userId: 'user-1', companyId: 'company-a', role: 'employee' });
+
+      const call = prisma.shift.findMany.mock.calls[0][0];
+      expect(call.where.site).toEqual({ companyId: 'company-a' });
+      expect(call.where.status).toBe('published');
+      expect(call.where.assignments.some.status).toBe('offered');
+      expect(call.where.assignments.some.offers.some).toEqual({ status: 'open', offeredBy: { not: 'user-1' } });
+      expect(call.include.assignments.where).toEqual({ status: 'offered' });
+      expect(call.include.assignments.include.offers.where).toEqual({ status: 'open' });
     });
   });
 
@@ -308,13 +334,13 @@ describe('ShiftsService', () => {
       expect(prisma.shiftAssignment.create).not.toHaveBeenCalled();
     });
 
-    it('blocks assigning when the employee marked that day as unavailable', async () => {
+    it('blocks assigning when the employee marked that day as fully unavailable (no range specified)', async () => {
       prisma.shift.findFirst.mockResolvedValue(shift1);
       prisma.user.findFirst.mockResolvedValue({ id: 'user-1' });
       prisma.availability.findFirst.mockResolvedValue({
         isAvailable: false,
-        startTime: '09:00',
-        endTime: '17:00',
+        startTime: '00:00',
+        endTime: '23:59',
         specificDate: null,
       });
 
@@ -322,6 +348,41 @@ describe('ShiftsService', () => {
         ConflictException,
       );
       expect(prisma.shiftAssignment.create).not.toHaveBeenCalled();
+    });
+
+    it('blocks assigning when the shift overlaps a narrowed unavailability range', async () => {
+      prisma.shift.findFirst.mockResolvedValue(shift1); // 08:00 -> 16:00
+      prisma.user.findFirst.mockResolvedValue({ id: 'user-1' });
+      prisma.availability.findFirst.mockResolvedValue({
+        isAvailable: false,
+        startTime: '09:00',
+        endTime: '11:00',
+        specificDate: null,
+      });
+
+      await expect(service.assign('company-a', 'shift-1', { userId: 'user-1' })).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.shiftAssignment.create).not.toHaveBeenCalled();
+    });
+
+    it('allows assigning when the shift falls outside a narrowed unavailability range', async () => {
+      prisma.shift.findFirst.mockResolvedValue(shift1); // 08:00 -> 16:00
+      prisma.user.findFirst.mockResolvedValue({ id: 'user-1' });
+      prisma.availability.findFirst.mockResolvedValue({
+        isAvailable: false,
+        startTime: '17:00',
+        endTime: '19:00',
+        specificDate: null,
+      });
+      prisma.shiftAssignment.findFirst.mockResolvedValue(null);
+      prisma.shiftAssignment.create.mockResolvedValue({ id: 'assignment-1' });
+
+      await service.assign('company-a', 'shift-1', { userId: 'user-1' });
+
+      expect(prisma.shiftAssignment.create).toHaveBeenCalledWith({
+        data: { shiftId: 'shift-1', userId: 'user-1', status: 'assigned' },
+      });
     });
 
     it("blocks assigning when the shift falls outside the employee's declared hours", async () => {

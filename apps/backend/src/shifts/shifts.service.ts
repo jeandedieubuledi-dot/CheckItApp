@@ -37,7 +37,14 @@ export class ShiftsService {
   // Un employé ne voit que les shifts où il a une assignation — jamais le
   // planning complet du site (filtré côté requête Prisma, pas juste caché
   // à l'affichage : un employé ne doit jamais recevoir les données des
-  // shifts d'un collègue). Managers/admins continuent de voir tout le site.
+  // shifts d'un collègue). Managers/admins continuent de voir tout le site,
+  // brouillons compris — c'est justement l'écran où ils les travaillent
+  // avant publication.
+  //
+  // Un employé ne voit en plus que les shifts déjà publiés : le workflow
+  // "brouillon -> on assigne -> on publie" (voir CreateShiftDto.status,
+  // défaut 'draft') n'a de sens que si un brouillon reste invisible côté
+  // mobile même une fois assigné, sinon publier ne changerait rien.
   findAll(user: AuthenticatedUser, query: FindShiftsQueryDto) {
     const isEmployee = user.role === 'employee';
 
@@ -53,13 +60,41 @@ export class ShiftsService {
               },
             }
           : {}),
-        ...(isEmployee ? { assignments: { some: { userId: user.userId } } } : {}),
+        ...(isEmployee ? { assignments: { some: { userId: user.userId } }, status: 'published' } : {}),
       },
       include: {
         // Même filtrage sur les assignations incluses : un shift peut avoir
         // une assignation annulée appartenant à un autre employé (historique
         // de réassignation) — un employé ne doit jamais la voir non plus.
         assignments: { where: isEmployee ? { userId: user.userId } : undefined, include: { offers: true } },
+      },
+      orderBy: { startsAt: 'asc' },
+    });
+  }
+
+  // Seul endroit où un employé voit des shifts qui ne sont pas les siens —
+  // le marché d'échange (voir checkin-mobile ShiftMarketplaceScreen). Portée
+  // volontairement étroite : uniquement les shifts avec une offre ouverte
+  // faite par un AUTRE employé (jamais le planning complet d'un collègue,
+  // voir findAll ci-dessus), et jamais un brouillon (cohérent avec le
+  // workflow brouillon/publication).
+  findMarketplaceOffers(user: AuthenticatedUser) {
+    return this.prisma.shift.findMany({
+      where: {
+        site: { companyId: user.companyId },
+        status: 'published',
+        assignments: {
+          some: {
+            status: 'offered',
+            offers: { some: { status: 'open', offeredBy: { not: user.userId } } },
+          },
+        },
+      },
+      include: {
+        assignments: {
+          where: { status: 'offered' },
+          include: { offers: { where: { status: 'open' } } },
+        },
       },
       orderBy: { startsAt: 'asc' },
     });
@@ -334,20 +369,49 @@ export class ShiftsService {
     const dateLabel = formatDate(dayStart);
     const shiftRangeLabel = `${formatTime(startsAt)} et ${formatTime(endsAt)}`;
 
-    if (!availability || !availability.isAvailable) {
+    if (!availability) {
       throw new ConflictException(`Cet employé n'est pas disponible le ${dateLabel} entre ${shiftRangeLabel}`);
     }
 
-    const availStart = timeOnDay(dayStart, availability.startTime);
-    const availEnd = timeOnDay(dayStart, availability.endTime);
-    if (startsAt < availStart || endsAt > availEnd) {
+    if (availability.isAvailable) {
+      const availStart = timeOnDay(dayStart, availability.startTime);
+      const availEnd = timeOnDay(dayStart, availability.endTime);
+      if (startsAt < availStart || endsAt > availEnd) {
+        throw new ConflictException(
+          `Cet employé n'est disponible que de ${availability.startTime} à ${availability.endTime} le ${dateLabel}, ` +
+            `en dehors du créneau du shift (${shiftRangeLabel})`,
+        );
+      }
+      return;
+    }
+
+    // isAvailable: false — bloque toute la journée par défaut. L'employé a pu
+    // restreindre son indisponibilité à une plage précise (écran
+    // Disponibilités, "Préciser une plage horaire" — voir FULL_DAY_START/END) :
+    // dans ce cas seul un shift qui chevauche cette plage est refusé, le reste
+    // de la journée reste assignable.
+    const isFullDayBlock = availability.startTime === FULL_DAY_START && availability.endTime === FULL_DAY_END;
+    if (isFullDayBlock) {
+      throw new ConflictException(`Cet employé n'est pas disponible le ${dateLabel} entre ${shiftRangeLabel}`);
+    }
+
+    const blockStart = timeOnDay(dayStart, availability.startTime);
+    const blockEnd = timeOnDay(dayStart, availability.endTime);
+    const overlapsBlock = startsAt < blockEnd && endsAt > blockStart;
+    if (overlapsBlock) {
       throw new ConflictException(
-        `Cet employé n'est disponible que de ${availability.startTime} à ${availability.endTime} le ${dateLabel}, ` +
-          `en dehors du créneau du shift (${shiftRangeLabel})`,
+        `Cet employé a déclaré être indisponible de ${availability.startTime} à ${availability.endTime} le ` +
+          `${dateLabel}, ce qui chevauche le créneau du shift (${shiftRangeLabel})`,
       );
     }
   }
 }
+
+// Sentinelle "toute la journée" pour une indisponibilité non restreinte à une
+// plage précise — voir CLAUDE.md décision #8 et AvailabilitiesScreen côté
+// checkin-mobile ("Préciser une plage horaire").
+const FULL_DAY_START = '00:00';
+const FULL_DAY_END = '23:59';
 
 function pad(n: number): string {
   return String(n).padStart(2, '0');

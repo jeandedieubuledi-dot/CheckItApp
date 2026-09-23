@@ -334,12 +334,16 @@ async function main() {
   for (const emp of employees.slice(0, 5)) {
     for (let day = 0; day <= 5; day++) {
       const isAvailable = Math.random() > 0.2;
+      // Indisponible = toute la journée par défaut dans le jeu de démo (pas
+      // de plage restreinte) — voir FULL_DAY_START/END dans
+      // ShiftsService.ensureAvailable, ces bornes précises ont un sens
+      // désormais (elles ne sont plus ignorées quand isAvailable est false).
       await prisma.availability.create({
         data: {
           userId: emp.id,
           dayOfWeek: day,
-          startTime: isAvailable ? pick(['08:00', '09:00', '12:00']) : '09:00',
-          endTime: isAvailable ? pick(['16:00', '17:00', '20:00']) : '17:00',
+          startTime: isAvailable ? pick(['08:00', '09:00', '12:00']) : '00:00',
+          endTime: isAvailable ? pick(['16:00', '17:00', '20:00']) : '23:59',
           isAvailable,
         },
       });

@@ -17,11 +17,15 @@ Cible : PME de 20-100 employés par site.
 - **`apps/checkin-pos`** — App tablette (Expo/React Native), mode kiosk, fixée sur
   le lieu de travail (caisse, vestiaire). C'est le terminal de pointage physique.
   **Ne s'authentifie PAS comme un utilisateur** — s'authentifie comme un
-  `SiteDevice` (voir plus bas). Permet : scan QR par le téléphone de l'employé,
-  identification par badge/NFC, PIN code, enrôlement de nouveaux badges.
+  `SiteDevice` (voir plus bas). Permet : scan (par la caméra de la tablette) du
+  QR rotatif affiché sur le téléphone de l'employé, identification par
+  badge/NFC, PIN code, enrôlement de nouveaux badges, pairing initial de
+  l'appareil et rotation de son `qrSecret`.
 - **`apps/web-manager`** — App web (React/Vite), managers uniquement. Seul endroit
-  où on peut créer/éditer des horaires. Propose aussi tout ce que le mobile
-  propose côté manager (validation d'échanges, présence en direct).
+  où on peut créer/éditer des horaires (Planning en drag-drop). Propose aussi :
+  validation des échanges de shifts (Approvals), présence en direct, gestion de
+  l'équipe (dont l'override GPS par employé), gestion des sites (avec
+  géocodage d'adresse), réglages entreprise (toggle GPS).
 
 ## Décisions d'architecture déjà prises (ne pas reproposer sans raison forte)
 
@@ -55,6 +59,307 @@ Cible : PME de 20-100 employés par site.
    utilisé. Ne pas ajouter de détection "client mobile vs web" côté backend
    sauf décision explicite contraire.
 
+6. **QR rotatif = TOTP (RFC 6238, `otplib`), pas un QR statique.** Le secret
+   (`User.qrSecret`) est généré une seule fois côté serveur, à la première
+   activation, et n'est jamais transmis au client — seul le code à 6 chiffres
+   dérivé l'est. Le téléphone de l'employé (checkin-mobile) affiche ce code
+   sous forme de QR qui se régénère toutes les 30s (`PersonalQrCode` +
+   `RotatingQrService.generateCode`) ; la tablette (checkin-pos) le scanne et
+   renvoie `{ userId, code }` au backend pour vérification
+   (`RotatingQrService.verifyCode`), avec une fenêtre de tolérance d'une étape
+   pour absorber le décalage d'horloge entre les deux appareils.
+
+7. **Échange de shifts (marché) modélisé par `ShiftOffer`**, distinct de
+   `ShiftAssignment` : un employé propose son shift assigné (`offeredBy`), un
+   collègue l'accepte (`acceptedBy`), puis un manager valide ou refuse
+   (`requiresManagerApproval`, `true` par défaut). Avant toute validation,
+   revérifier que le collègue acceptant n'a pas un conflit d'horaire sur ce
+   créneau (`ensureNoOverlap`) — c'est un cas légitime de 409, pas un bug, et
+   l'UI doit l'afficher clairement plutôt que d'échouer silencieusement (voir
+   historique : `ShiftApprovalPage` catchait déjà ce cas correctement une
+   fois corrigé).
+
+8. **`ShiftsService.assign()` vérifie la disponibilité déclarée avant
+   d'assigner.** Une entrée `Availability` sur une date précise (`specificDate`)
+   prime sur une entrée récurrente (`dayOfWeek`) pour ce même jour ; absence
+   totale de disponibilité déclarée → rejet en 409 (pas de déclaration =
+   bloqué par défaut). Si une entrée existe :
+   - `isAvailable: true` → le shift doit rentrer entièrement dans
+     `startTime`/`endTime` (comportement backend inchangé). Côté écran
+     Disponibilités (checkin-mobile), un employé ne peut plus saisir
+     d'heures pour "Disponible" — l'écran envoie toujours la sentinelle
+     "toute la journée" (`FULL_DAY_START`/`FULL_DAY_END` = `00:00`/`23:59`)
+     pour toute nouvelle déclaration. Le check d'heures ci-dessus reste dans
+     le backend (générique, pas mort : une ligne existante avec une fenêtre
+     plus étroite, ex. import ou ancien jeu de données, doit continuer à
+     être respectée) mais n'est plus atteignable via l'app pour un nouveau
+     "Disponible" — ne pas réintroduire de saisie d'heures ici sans
+     décision produit explicite contraire.
+   - `isAvailable: false` → bloque **toute la journée par défaut**. Mais
+     `startTime`/`endTime` ne sont plus ignorés : l'employé peut "préciser
+     une plage" (écran Disponibilités) au lieu de la sentinelle "toute la
+     journée" — mais seulement l'un des deux bords à la fois, pas les
+     deux : soit *« à partir de X »* (`startTime: X`, `endTime` = sentinelle
+     de fin `23:59`), soit *« jusqu'à Y »* (`startTime` = sentinelle de
+     début `00:00`, `endTime: Y`). Un seul champ horaire à saisir, jamais un
+     intervalle fermé au milieu de la journée avec les deux bords
+     personnalisés — c'est un choix produit (simplicité de saisie), pas une
+     limite technique : `ensureAvailable` teste un chevauchement générique
+     et accepterait tout aussi bien un intervalle fermé arbitraire. Seul un
+     shift qui chevauche la plage ainsi bloquée est rejeté, le reste du jour
+     reste assignable. Ne pas contourner cette vérification pour un ajout
+     "rapide" de shift, et ne jamais réinterpréter `startTime`/`endTime` sur
+     une ligne `isAvailable: true` comme une plage d'indisponibilité (deux
+     sens opposés du même champ selon `isAvailable` — voulu, pas une
+     incohérence à "corriger").
+
+9. **GPS clock-in désactivable, à deux niveaux** : `Company.gpsClockInEnabled`
+   (réglage par défaut de l'entreprise) et `User.gpsClockInEnabled` nullable
+   (override par employé — `null` = hérite du réglage entreprise). Le réglage
+   résolu (override employé ?? défaut entreprise) doit être vérifié par
+   `TimeEntriesService.createSelf` avant d'accepter un pointage `source: gps` ;
+   sinon 403.
+
+10. **Géocodage via Nominatim/OpenStreetMap (pas de clé API), réservé
+    admin/manager.** `/geocoding/search` (adresse → coordonnées, utilisé à la
+    création/édition d'un site) et `/geocoding/reverse` (coordonnées → adresse
+    lisible, utilisé sur les écrans de présence en direct quand un pointage
+    GPS existe mais que le site n'a pas de coordonnées déclarées). Le reverse
+    geocoding doit rester fail-soft (ne jamais casser l'écran de présence) et
+    est mis en cache mémoire (clé = coordonnées arrondies, TTL 1h) pour
+    respecter le rate-limit de Nominatim.
+
+11. **Scoping par rôle sur la lecture, pas seulement sur l'écriture** :
+    `GET /shifts` ne renvoie à un employé que les shifts où il est assigné
+    (filtré dans la requête Prisma elle-même, jamais côté client) ; manager/
+    admin voient tout le planning du site. `GET /sites/:id/presence` est
+    réservé admin/manager (il expose les coordonnées GPS exactes des collègues)
+    et renvoie en plus `source` (méthode de pointage) et
+    `distanceFromSiteMeters` (haversine, uniquement pour `source: gps` et un
+    site avec coordonnées).
+
+12. **Grille du planning (web-manager, `PlanningPage`) = tableau
+    employés x jours, pas une colonne par jour avec les shifts empilés.**
+    Structure exacte (voir `PlanningGridCell`, `EmployeeRowHeader`) :
+    - 1ère colonne : sélecteur « Semaine »/« Jour » (bascule le nombre de
+      colonnes jour affichées, 7 ou 1 — indépendant du toggle Semaine/Mois
+      qui reste au-dessus et gère la vue mois séparée) puis une ligne par
+      employé (photo ronde = initiales tant qu'il n'y a pas de vraie photo
+      de profil dans `User`, nom, total d'heures assignées sur la semaine).
+    - Colonnes suivantes : Lundi → Dimanche (`WEEKDAY_LABELS_FR` dans
+      `lib/date.ts` — respecter cet ordre, pas celui de `Date.getDay()`).
+    - 1ère ligne du corps : « Shifts disponibles », fond vert menthe très
+      pâle (`colors.accentTint`), affiche les shifts sans assignation du
+      jour concerné.
+    - Une carte de shift (`ShiftCard`) = horaire en gras + durée en dessous
+      (`formatDurationLabel`), fond pastel très léger et texte assorti,
+      couleur choisie par hash déterministe de l'id du shift parmi 4
+      (orange/bleu/rose/violet — `shiftPalette` dans `ui-tokens`,
+      `getShiftPalette` côté web-manager). Séparations de grille fines,
+      gris clair (`colors.border`).
+    - Glisser-déposer : toute la carte est la poignée ; on la lâche sur une
+      cellule (employé x jour) pour assigner (uniquement si le shift n'a
+      pas déjà un titulaire différent — pas de ré-assignation, le backend
+      ne l'expose pas) et/ou changer son jour, en une seule dépose
+      (`PlanningPage.moveShift`, combine `PATCH /shifts/:id` et
+      `POST /shifts/:id/assign`).
+
+13. **Création de shift = modèle sans date d'abord, date au moment de la
+    dépose.** Le formulaire « Nouveau shift » ne prend plus que des heures
+    (`type="time"`, ex. 16h-20h) : il ne crée pas de `Shift` en base, il
+    ajoute un `ShiftTemplate` (`lib/shiftTemplates.ts` — id, startTime,
+    endTime, roleNeeded), un concept **purement client**, persisté en
+    `localStorage`, jamais envoyé au backend tel quel (le `Shift` Prisma
+    exige `startsAt`/`endsAt`, voir schema). Le modèle s'affiche sous le
+    formulaire comme une carte réutilisable (`ShiftTemplateCard`, même
+    palette pastel que `ShiftCard`) qu'on glisse sur une cellule de la
+    grille : `PlanningPage.placeTemplate` combine alors la date de la
+    cellule avec les heures du modèle (`combineDateAndTime`,
+    `durationMinutesFromTimeRange` — gère le passage à minuit pour un
+    shift de nuit) et appelle `POST /shifts` (**`status: 'draft'`**, voir
+    décision #15) puis, si déposé sur la ligne d'un employé,
+    `POST /shifts/:id/assign`. Le modèle n'est pas consommé par la dépose :
+    il reste dans la bibliothèque pour être réutilisé (suppression
+    manuelle via le bouton sur la carte).
+
+14. **Indisponibilités affichées dans la grille = seulement les
+    déclarations explicites (`Availability.isAvailable: false`), pas
+    l'absence de déclaration — et distinguées visuellement selon qu'elles
+    couvrent toute la journée ou juste une plage.** Le backend bloque
+    l'assignation dans tous les cas, y compris l'absence de déclaration
+    (`ShiftsService.ensureAvailable` — décision #8), mais côté affichage
+    (`lib/availability.ts` → `getUnavailabilityInfo`, qui renvoie
+    `'none' | 'full' | 'from' | 'until'`) l'absence de déclaration retombe
+    sur `'none'` : "pas encore renseigné" ne veut pas dire "refusé", et tout
+    marquer pareil noierait la grille (beaucoup de créneaux ne sont jamais
+    déclarés dans les données de démo).
+    - `'full'` (journée entière) : fond plein rose très pâle (`#FEF2F2`) +
+      étiquette « Indisponible ».
+    - `'from'`/`'until'` (plage partielle, décision #8) : même teinte mais
+      en **dégradé horizontal proportionnel** à la portion bloquée de la
+      journée (`PlanningGridCell` → `partialGradient`, `lib/date.ts` →
+      `fractionOfDay` ; gauche = 00:00, droite = 24:00 — ex. « à partir de
+      18h » teinte les 25% de droite de la cellule) + étiquette « Indisponible
+      dès/jusqu'à HH:mm » plutôt que le texte générique. Cette mini-timeline
+      dans la cellule est le seul indice visuel de la portion bloquée — pas
+      de découpage réel de la cellule par créneau.
+    - La dépose n'est bloquée que si l'élément réellement glissé chevauche
+      la plage indisponible ce jour-là (`PlanningGridCell` recombine
+      l'heure de l'élément glissé — `draggedTimeRange`, indépendante de sa
+      date d'origine — avec la date de la cellule via
+      `isEmployeeAvailableForShift`, décision #16) : une indisponibilité
+      partielle ne bloque plus toute la ligne, contrairement à avant. Le
+      menu déroulant de secours sur `ShiftCard` applique la même
+      vérification précise, voir décision #16.
+
+15. **Workflow brouillon -> assignation -> publication, appliqué côté
+    backend et pas juste côté écran.** `Shift.status` par défaut à
+    `'draft'` à la création (`CreateShiftDto.status`, déjà le cas côté
+    Prisma) ; le manager peut travailler et assigner un brouillon
+    librement (il le voit toujours, voir `ShiftsService.findAll`), mais
+    **un employé ne voit un shift que s'il est à la fois assigné à lui ET
+    `status: 'published'`** — sinon publier ne changerait rien à ce qu'il
+    voit sur checkin-mobile. C'est un filtre Prisma dans la requête, pas un
+    masquage à l'affichage (même logique que le scoping companyId/rôle,
+    décision #11). Côté web-manager : `ShiftCard` affiche une bordure en
+    tirets + étiquette « Brouillon » et une action rapide *Publier* par
+    carte (icône `Send`) ; `PlanningPage` a en plus un bouton « Publier N
+    brouillons » qui publie en une fois tous les brouillons de la semaine
+    chargée (`publishAllDrafts`, confirmation via `Dialog`). Ne jamais
+    faire dépendre cette visibilité d'une vérification côté client — le
+    filtre `status: 'published'` doit rester dans la requête Prisma de
+    `findAll`.
+
+16. **Le sélecteur d'assignation d'une carte de shift (`ShiftCard`, repli
+    sans glisser-déposer) filtre les employés proposés par disponibilité
+    réelle sur l'HEURE du shift, pas juste sur le jour.** Un employé
+    indisponible seulement 12h-14h doit rester proposable pour un shift
+    16h-20h le même jour — filtrer au jour près (comme le fait la grille
+    pour son étiquette « Indisponible », décision #14) aurait exclu à tort
+    tous les employés partiellement indisponibles ce jour-là. Voir
+    `lib/availability.ts` → `isEmployeeAvailableForShift`, un miroir client
+    exact de `ShiftsService.ensureAvailable` (décision #8) : recalculer
+    cette règle côté frontend est fragile (double maintenance), mais
+    nécessaire ici pour éviter de proposer un choix que le backend
+    refuserait de toute façon en 409.
+
+17. **Ce même sélecteur exclut aussi tout employé déjà occupé ce jour-là,
+    même sans chevauchement horaire avec CE shift précis** — contrairement
+    à la décision #16 (qui ne regarde que la disponibilité déclarée), ici
+    c'est un choix produit délibéré : on ne veut pas encourager à donner un
+    second shift le même jour à quelqu'un qui en a déjà un, même si les
+    horaires ne se chevauchent pas (ex: un shift 08h-12h ne bloque pas pour
+    12h-14h côté `ensureNoOverlap`, mais on ne le propose plus quand même
+    dans ce sélecteur). `PlanningGridCell` fournit `dayShifts` (tous les
+    shifts du jour de la cellule, tous employés, assignés ou non) à chaque
+    `ShiftCard`, qui exclut les employés y ayant une assignation active
+    (`status !== 'cancelled'`) de la liste proposée. Ne pas confondre avec
+    `ensureNoOverlap` côté backend (décision #8), qui reste, lui, au
+    chevauchement horaire strict — cette restriction-ci n'existe que côté
+    web-manager, pour guider vers de meilleures assignations, pas pour
+    empêcher techniquement un second shift le même jour (le glisser-déposer
+    direct sur une cellule employé, ou l'API, restent possibles).
+
+18. **La simple bascule Disponible/Indisponible (checkin-mobile,
+    `AvailabilitiesScreen`) n'engage QUE le jour affiché — jamais les
+    semaines suivantes.** Poser une indisponibilité récurrente (qui vaut
+    pour toutes les semaines suivantes) est une action **explicite**,
+    réservée au bouton dédié « Rendre récurrente » / « Indisponibilité
+    récurrente (toute la journée) » (`applyRecurringFullDayBlock`) —
+    jamais une conséquence du toggle. C'est une distinction volontaire de
+    mécanisme, pas seulement de mot : plutôt que "permanente" (mot choisi
+    par le demandeur, mais ambigu — suggère l'irrévocable), l'écran et ce
+    document parlent d'indisponibilité **récurrente**, le terme standard en
+    planification pour "se répète chaque semaine".
+    - **Bascule (`toggleDay`)** : crée/édite toujours une exception
+      ponctuelle (`Availability` avec `specificDate` = la date exacte de
+      cette occurrence dans la semaine affichée), jamais l'enregistrement
+      `dayOfWeek`. Exception à cette règle : la toute première bascule vers
+      Disponible sur un jour de semaine qui n'a jamais rien de déclaré crée
+      un enregistrement `dayOfWeek` avec `isAvailable: true` — sinon ce
+      jour resterait bloqué indéfiniment (absence de déclaration = refusé
+      par défaut, décision #8) et il faudrait le redéclarer chaque semaine ;
+      ce n'est pas "poser une récurrence d'indisponibilité", c'est établir
+      la ligne de base disponible sans laquelle l'écran serait inutilisable.
+    - **« Rendre récurrente » / « Indisponibilité récurrente (toute la
+      journée) »** (`applyRecurringFullDayBlock`) — seul point d'entrée qui
+      pose ou renforce un blocage `dayOfWeek` (`isAvailable: false`, journée
+      entière). Supprime l'exception ponctuelle du jour affiché si elle
+      existait (devenue redondante, la récurrence couvre désormais ce jour
+      de toute façon). Visible directement sur l'état « Indisponible »
+      plein-jour (à côté de « Préciser une plage horaire »), et comme
+      filet de secours dans l'éditeur de plage.
+    - **Remettre disponible un jour bloqué par une récurrence ACTIVE**
+      (aucune exception ponctuelle en dessous) déclenche une boîte de
+      dialogue plutôt qu'une bascule directe, puisque l'action a un impact
+      au-delà du jour affiché :
+      - **« Garder la récurrence, libérer cette semaine »** — crée une
+        exception ponctuelle (`specificDate`, `isAvailable: true`) pour la
+        semaine affichée, sans toucher à l'enregistrement `dayOfWeek` :
+        repose entièrement sur la précédence déjà existante specificDate >
+        dayOfWeek de `resolveAvailability` (frontend) /
+        `ShiftsService.ensureAvailable` (backend, décision #8) — **aucun
+        changement backend n'a été nécessaire**.
+      - **« Annuler la récurrence définitivement »** — repasse directement
+        l'enregistrement `dayOfWeek` à `isAvailable: true`, pour toutes les
+        semaines.
+      Si la bascule touche un jour bloqué par une exception ponctuelle
+      seule (pas de récurrence active), c'est un cas simple et scopé au
+      jour affiché : la supprimer suffit, pas de dialogue.
+    L'éditeur de plage (« Préciser une plage horaire ») et sa sauvegarde
+    (`saveEditing`) opèrent sur le même enregistrement que celui qui produit
+    l'affichage courant — l'exception ponctuelle si elle existe, sinon la
+    récurrence active — jamais l'un à la place de l'autre.
+
+19. **`AvailabilitiesScreen` (checkin-mobile) navigue entre semaines**
+    (flèches sous le titre, `weekStart` en state au lieu d'un `useMemo` figé
+    au montage) — nécessaire pour que la décision #18 ait un sens : sans
+    navigation, il n'y avait qu'une seule semaine à voir, donc rien à
+    distinguer entre "ce jour est indisponible cette semaine" et "il l'est
+    de façon récurrente". `weekDates` (7 jours dérivés de `weekStart`) et
+    `overrideForDay` (exceptions ponctuelles de la semaine affichée) se
+    recalculent avec la semaine courante — `toggleDay` et
+    `keepRecurringButFreeThisWeek` (décision #18) opèrent donc sur la
+    semaine *affichée*, pas nécessairement la semaine réelle actuelle.
+    Deux signes distinctifs accompagnent cette navigation, pour qu'un
+    employé qui parcourt les semaines suivantes comprenne d'où vient ce
+    qu'il voit sans avoir à deviner :
+    - **Badge répétition** (icône `repeat`, à côté de « Indisponible ») —
+      affiché quand l'indisponibilité vient de la récurrence et s'applique
+      bien cette semaine (pas masquée par une exception ponctuelle).
+      Répond directement au besoin : confirmer que « l'indisponibilité
+      récurrente a bien été appliquée » — par opposition à une
+      indisponibilité qui ne concerne que le jour affiché (pas de badge).
+    - **« Exception cette semaine »** (sous « Disponible ») — cas inverse :
+      une récurrence existe mais est mise en pause cette semaine par une
+      exception ponctuelle active ; sans ce texte, « Disponible » seul
+      aurait pu laisser croire que la récurrence avait été annulée pour de
+      bon.
+    Aucun changement backend : ces deux indicateurs ne font que lire l'état
+    déjà renvoyé par `GET /availabilities` (recurring vs override), calculé
+    côté client (`isRecurringApplied` / `isRecurringPaused`).
+
+20. **`GET /shift-offers` est le SEUL endroit où un employé voit des shifts
+    qui ne sont pas les siens** — ajouté après coup pour corriger une
+    régression du marché d'échange (checkin-mobile
+    `ShiftMarketplaceScreen`) : `GET /shifts` ne renvoie jamais que les
+    shifts de l'appelant pour un employé (`assignments: { some: { userId }
+    }`, décision #11), donc dériver les offres ouvertes des collègues à
+    partir de `getShifts()` (comme le faisait l'écran avant cette
+    correction) ne pouvait structurellement jamais rien trouver — un
+    employé recevait toujours *ses propres* offres, jamais celles d'un
+    autre. `ShiftsService.findMarketplaceOffers` renvoie les shifts ayant
+    au moins une assignation `status: 'offered'` avec une offre
+    `status: 'open'` faite par quelqu'un d'AUTRE que l'appelant
+    (`offeredBy: { not: user.userId }`), scopés à l'entreprise et jamais un
+    brouillon (cohérent avec le workflow de publication, décision #15).
+    Portée volontairement étroite : uniquement ces shifts-offres précis,
+    jamais le planning complet d'un collègue — ne pas élargir ce filtre
+    sans décision produit explicite. L'écran fait maintenant deux appels
+    distincts : `getShifts()` pour « Mes échanges » (shifts propres,
+    inchangé), `getMarketplaceOffers()` (`GET /shift-offers`) pour
+    « Disponibles ».
+
 ## Stack
 
 - Backend : NestJS + PostgreSQL + Prisma + Passport/JWT
@@ -68,28 +373,69 @@ Cible : PME de 20-100 employés par site.
 
 ## État actuel du repo
 
-**Fait** :
-- Schéma Prisma complet (`apps/backend/prisma/schema.prisma`) — 9 tables
-- `AuthModule` fonctionnel : register, login, refresh, stratégie JWT
-- `TenantScopeGuard` et `JwtAuthGuard`
-- Squelettes de modules : companies, sites, users, site-devices, time-entries,
-  shifts, availabilities (structure posée, logique métier à écrire)
-- `packages/shared-types` avec les types de base
-- `packages/api-client` avec un client HTTP typé minimal
-- Scaffolds des 3 apps front (package.json + point d'entrée minimal, pas encore
-  d'écrans réels)
+Le projet a dépassé le stade du squelette : les 3 apps front ont des écrans
+réels et fonctionnels, le backend a sa logique métier implémentée (pas
+seulement les routes), et il tourne en démo (seed réaliste, déploiement
+Railway). Ce n'est plus une base à construire mais un produit existant à
+faire évoluer — vérifier l'état réel du code avant de supposer qu'une brique
+reste "à faire".
 
-**À faire, dans l'ordre recommandé** :
-1. `pnpm install` à la racine, `docker compose up -d`, `prisma migrate dev`
-   pour valider que la base tourne
-2. Implémenter `CompaniesService`/`SitesService`/`UsersService` (CRUD, toujours
-   filtré par companyId)
-3. Implémenter `SiteDevicesService` (génération/rotation du `qrSecret`, endpoint
-   d'authentification d'appareil pour checkin-pos)
-4. Implémenter `TimeEntriesService` (les 3 modes de pointage)
-5. Écrans checkin-pos : scan QR, saisie PIN, enrôlement badge
-6. Écrans checkin-mobile : login, pointage, dispos, marché de shifts
-7. `ShiftsService` + écrans web-manager pour la création de planning
+**Fait** :
+- Schéma Prisma complet (`apps/backend/prisma/schema.prisma`) — 10 tables,
+  incluant `ShiftOffer` (marché d'échange) et `AuditLog` (traçabilité —
+  table présente mais **non encore alimentée par aucun service**, voir
+  "Connu manquant" ci-dessous)
+- `AuthModule` fonctionnel : register, login, refresh, stratégie JWT.
+  Le logout (checkin-mobile) est **purement client** (vide le stockage local)
+  — aucun endpoint de révocation de refresh token côté backend
+- `TenantScopeGuard` et `JwtAuthGuard` (+ `DeviceAuthGuard`/`DeviceJwtStrategy`
+  pour l'auth appareil de checkin-pos)
+- Tous les modules backend ont leur logique métier écrite, avec test unitaire
+  associé (8 fichiers `*.spec.ts`) : companies, sites, users, site-devices,
+  time-entries, shifts, availabilities, geocoding
+- Les 3 modes de pointage physiques sont opérationnels : QR rotatif TOTP
+  (téléphone → tablette), badge/NFC, PIN — plus `gps` (activable/désactivable
+  par entreprise et par employé, voir décision #9) et `manual_by_manager`
+- Marché d'échange de shifts (`ShiftOffer`) avec validation manager et
+  vérification anti-conflit (décision #7)
+- Disponibilités (`Availability`) + vérification automatique avant
+  assignation d'un shift (décision #8)
+- Géocodage d'adresses (Nominatim) pour la création de sites et la résolution
+  d'adresse en présence en direct (décision #10)
+- Présence en direct (web-manager `PresenceLivePage` + checkin-mobile
+  `PresenceLiveScreen`) avec badge de source de pointage et distance GPS
+  colorée par seuil
+- Écrans réels sur les 3 apps :
+  - **checkin-mobile** : Login, Pointage (QR rotatif + fallback badge/PIN),
+    Planning (lecture seule, scopé employé), Disponibilités (bascule
+    Disponible/Indisponible par jour, sans heures à saisir ; en option, une
+    indisponibilité peut être restreinte à un seul bord — « à partir de » OU
+    « jusqu'à », pas les deux — via « Préciser une plage horaire », voir
+    décision #8 ; rebasculer un jour récurrent vers Disponible ouvre un
+    choix garder-la-récurrence/annuler, décision #18), Marché de shifts,
+    Validation d'échanges, Présence en direct, Profil (logout)
+  - **checkin-pos** : Pairing d'appareil, Accueil kiosk (scan QR), Saisie PIN,
+    Enrôlement badge, Écran hors-ligne
+  - **web-manager** : Login, Planning (grille employés x jours, création/
+    édition/assignation en drag-drop — voir décision #12), Approvals
+    (validation d'échanges), Présence en direct, Équipe (override GPS par
+    employé), Sites (CRUD + géocodage), Réglages (toggle GPS entreprise)
+- Seed de démo réaliste : 6 semaines d'activité sur 8 employés
+- `packages/shared-types` et `packages/api-client` à jour avec toutes les
+  routes ci-dessus (évite la duplication de logique d'appel entre les 3 apps)
+- Déploiement configuré sur Railway (migrations Prisma auto-appliquées au
+  déploiement)
+
+**Connu manquant / dette identifiée** :
+1. Pas de révocation de session côté backend (voir logout ci-dessus) — à
+   traiter avant toute exigence de sécurité plus stricte (déconnexion à
+   distance, expiration forcée)
+2. `AuditLog` existe dans le schéma mais n'est écrit par aucun service —
+   pertinent pour l'exigence légale de traçabilité du pointage (2027), pas
+   juste un nice-to-have
+3. Pas d'écran de consultation/export des données de pointage par l'employé
+   lui-même — à vérifier au regard de l'exigence "accessible" de la
+   conformité belge
 
 ## Conventions de code
 
