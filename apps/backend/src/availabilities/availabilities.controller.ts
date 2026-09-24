@@ -16,7 +16,7 @@ export class AvailabilitiesController {
 
   @Post()
   create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateAvailabilityDto) {
-    return this.availabilitiesService.create(user.userId, dto);
+    return this.availabilitiesService.create(user.companyId, user.userId, dto);
   }
 
   @Get()

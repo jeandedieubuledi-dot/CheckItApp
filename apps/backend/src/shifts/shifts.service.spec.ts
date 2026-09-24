@@ -1,10 +1,12 @@
 import { Test } from '@nestjs/testing';
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { ShiftsService } from './shifts.service';
 
 describe('ShiftsService', () => {
   let service: ShiftsService;
+  let realtime: { emitToCompany: jest.Mock };
   let prisma: {
     site: { findFirst: jest.Mock };
     user: { findFirst: jest.Mock };
@@ -65,9 +67,14 @@ describe('ShiftsService', () => {
       },
       $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
     };
+    realtime = { emitToCompany: jest.fn() };
 
     const module = await Test.createTestingModule({
-      providers: [ShiftsService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        ShiftsService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: RealtimeGateway, useValue: realtime },
+      ],
     }).compile();
 
     service = module.get(ShiftsService);

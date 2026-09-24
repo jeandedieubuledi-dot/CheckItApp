@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet, RefreshControl, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,7 +22,7 @@ function initials(name: string) {
 // lequel approuver (chips tapables, un seul sélectionné à la fois). Un refus
 // remet l'assignation à son propriétaire d'origine (ShiftsService.rejectOffer).
 export function ShiftApprovalScreen() {
-  const { user } = useAuth();
+  const { user, socket } = useAuth();
   const [offers, setOffers] = useState<PendingShiftOffer[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [sites, setSites] = useState<Site[]>([]);
@@ -55,6 +55,15 @@ export function ShiftApprovalScreen() {
       void load();
     }, [load]),
   );
+
+  useEffect(() => {
+    if (!socket) return;
+    const onShiftsChanged = () => void load();
+    socket.on('shifts:changed', onShiftsChanged);
+    return () => {
+      socket.off('shifts:changed', onShiftsChanged);
+    };
+  }, [socket, load]);
 
   const refresh = async () => {
     setIsRefreshing(true);

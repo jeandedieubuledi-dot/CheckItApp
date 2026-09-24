@@ -3,6 +3,7 @@ import { ForbiddenException, NotFoundException, UnauthorizedException } from '@n
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { RotatingQrService } from '../users/rotating-qr.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { TimeEntriesService } from './time-entries.service';
 
 describe('TimeEntriesService', () => {
@@ -15,6 +16,7 @@ describe('TimeEntriesService', () => {
   };
   let usersService: { resolveByPin: jest.Mock };
   let rotatingQrService: { decodePayload: jest.Mock; verifyCode: jest.Mock };
+  let realtime: { emitToCompany: jest.Mock };
 
   beforeEach(async () => {
     prisma = {
@@ -30,6 +32,7 @@ describe('TimeEntriesService', () => {
     };
     usersService = { resolveByPin: jest.fn() };
     rotatingQrService = { decodePayload: jest.fn(), verifyCode: jest.fn() };
+    realtime = { emitToCompany: jest.fn() };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -37,6 +40,7 @@ describe('TimeEntriesService', () => {
         { provide: PrismaService, useValue: prisma },
         { provide: UsersService, useValue: usersService },
         { provide: RotatingQrService, useValue: rotatingQrService },
+        { provide: RealtimeGateway, useValue: realtime },
       ],
     }).compile();
 

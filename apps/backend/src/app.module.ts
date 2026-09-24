@@ -9,10 +9,12 @@ import { TimeEntriesModule } from './time-entries/time-entries.module';
 import { ShiftsModule } from './shifts/shifts.module';
 import { AvailabilitiesModule } from './availabilities/availabilities.module';
 import { GeocodingModule } from './geocoding/geocoding.module';
+import { RealtimeModule } from './realtime/realtime.module';
 
 @Module({
   imports: [
     PrismaModule,
+    RealtimeModule,
     AuthModule,
     CompaniesModule,
     SitesModule,

@@ -12,7 +12,7 @@ import { ChevronLeft, ChevronRight, Plus, Send } from 'lucide-react';
 import { colors, spacing, radius, typography, shadows } from '@horaires/ui-tokens';
 import type { Availability, Shift, Site, User } from '@horaires/shared-types';
 import { ApiError } from '@horaires/api-client';
-import { apiClient } from '../services/AuthService';
+import { apiClient, useAuth } from '../services/AuthService';
 import { SiteSelect } from '../components/SiteSelect';
 import { PlanningGridCell } from '../components/PlanningGridCell';
 import { EmployeeRowHeader } from '../components/EmployeeRowHeader';
@@ -47,6 +47,7 @@ type DropPayload = { type: 'cell'; date: string; employeeId: string | null };
 // SEUL endroit de tout le produit où on peut créer/éditer des horaires
 // (voir CLAUDE.md — choix produit, pas une restriction API).
 export function PlanningPage() {
+  const { socket } = useAuth();
   const [sites, setSites] = useState<Site[]>([]);
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [users, setUsers] = useState<User[]>([]);
@@ -77,17 +78,21 @@ export function PlanningPage() {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
+  const loadAvailabilities = useCallback(() => {
+    // Pas de userId : vue manager, toute l'entreprise (voir
+    // AvailabilitiesService.findAll) — nécessaire pour marquer les jours
+    // indisponibles de n'importe quel employé dans la grille.
+    apiClient.getAvailabilities().then(setAvailabilities);
+  }, []);
+
   useEffect(() => {
     apiClient.getSites().then((list) => {
       setSites(list);
       setSelectedSiteId((current) => current ?? list[0]?.id ?? null);
     });
     apiClient.getUsers().then(setUsers);
-    // Pas de userId : vue manager, toute l'entreprise (voir
-    // AvailabilitiesService.findAll) — nécessaire pour marquer les jours
-    // indisponibles de n'importe quel employé dans la grille.
-    apiClient.getAvailabilities().then(setAvailabilities);
-  }, []);
+    loadAvailabilities();
+  }, [loadAvailabilities]);
 
   const load = useCallback(async () => {
     if (!selectedSiteId) return;
@@ -112,6 +117,22 @@ export function PlanningPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Un autre manager (ou l'employé lui-même côté mobile) peut créer, publier
+  // ou modifier un shift pendant que cette page est ouverte — on recharge via
+  // les mêmes load() que le reste de la page plutôt que de fusionner un
+  // payload partiel (voir realtime.gateway.ts côté backend).
+  useEffect(() => {
+    if (!socket) return;
+    const onShiftsChanged = () => void load();
+    const onAvailabilitiesChanged = () => loadAvailabilities();
+    socket.on('shifts:changed', onShiftsChanged);
+    socket.on('availabilities:changed', onAvailabilitiesChanged);
+    return () => {
+      socket.off('shifts:changed', onShiftsChanged);
+      socket.off('availabilities:changed', onAvailabilitiesChanged);
+    };
+  }, [socket, load, loadAvailabilities]);
 
   const createTemplate = (e: React.FormEvent) => {
     e.preventDefault();

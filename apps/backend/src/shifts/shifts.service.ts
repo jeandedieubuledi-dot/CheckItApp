@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { AuthenticatedUser } from '../auth/current-user.decorator';
 import { CreateShiftDto } from './dto/create-shift.dto';
 import { UpdateShiftDto } from './dto/update-shift.dto';
@@ -9,7 +10,10 @@ import { FindShiftsQueryDto } from './dto/find-shifts-query.dto';
 
 @Injectable()
 export class ShiftsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly realtime: RealtimeGateway,
+  ) {}
 
   async create(companyId: string, createdBy: string, dto: CreateShiftDto) {
     const site = await this.prisma.site.findFirst({ where: { id: dto.siteId, companyId } });
@@ -23,7 +27,7 @@ export class ShiftsService {
       throw new BadRequestException("L'heure de fin doit être après l'heure de début");
     }
 
-    return this.prisma.shift.create({
+    const shift = await this.prisma.shift.create({
       data: {
         siteId: dto.siteId,
         startsAt,
@@ -33,6 +37,8 @@ export class ShiftsService {
         createdBy,
       },
     });
+    this.realtime.emitToCompany(companyId, 'shifts:changed');
+    return shift;
   }
 
   // Un employé ne voit que les shifts où il a une assignation — jamais le
@@ -160,7 +166,7 @@ export class ShiftsService {
       throw new BadRequestException("L'heure de fin doit être après l'heure de début");
     }
 
-    return this.prisma.shift.update({
+    const shift = await this.prisma.shift.update({
       where: { id },
       data: {
         ...(dto.siteId ? { siteId: dto.siteId } : {}),
@@ -170,6 +176,8 @@ export class ShiftsService {
         ...(dto.status ? { status: dto.status } : {}),
       },
     });
+    this.realtime.emitToCompany(companyId, 'shifts:changed');
+    return shift;
   }
 
   // Supprimer un shift qui a des assignations violerait la contrainte de clé
@@ -190,6 +198,7 @@ export class ShiftsService {
       this.prisma.shiftAssignment.deleteMany({ where: { shiftId: id } }),
       this.prisma.shift.delete({ where: { id } }),
     ]);
+    this.realtime.emitToCompany(companyId, 'shifts:changed');
   }
 
   // Un shift = un seul employé assigné à la fois.
@@ -217,9 +226,11 @@ export class ShiftsService {
     await this.ensureAvailable(dto.userId, shift.startsAt, shift.endsAt, site?.timezone ?? 'Europe/Brussels');
     await this.ensureNoOverlap(dto.userId, shift.startsAt, shift.endsAt, shiftId);
 
-    return this.prisma.shiftAssignment.create({
+    const assignment = await this.prisma.shiftAssignment.create({
       data: { shiftId, userId: dto.userId, status: 'assigned' },
     });
+    this.realtime.emitToCompany(companyId, 'shifts:changed');
+    return assignment;
   }
 
   async offerAssignment(companyId: string, employee: AuthenticatedUser, assignmentId: string) {
@@ -242,6 +253,7 @@ export class ShiftsService {
       }),
     ]);
 
+    this.realtime.emitToCompany(companyId, 'shifts:changed');
     return offer;
   }
 
@@ -277,9 +289,13 @@ export class ShiftsService {
       offer.shiftAssignment.shiftId,
     );
 
-    return this.prisma.shiftOfferCandidate.create({
+    const candidacy = await this.prisma.shiftOfferCandidate.create({
       data: { offerId, userId: colleague.userId },
     });
+    // Le manager voit la nouvelle candidature en direct sur la page
+    // Échanges à valider, sans avoir à recharger.
+    this.realtime.emitToCompany(companyId, 'shifts:changed');
+    return candidacy;
   }
 
   // Le manager choisit UN candidat parmi ceux qui ont postulé (dto.userId) —
@@ -320,6 +336,7 @@ export class ShiftsService {
       }),
     ]);
 
+    this.realtime.emitToCompany(companyId, 'shifts:changed');
     return updatedOffer;
   }
 
@@ -346,6 +363,7 @@ export class ShiftsService {
       }),
     ]);
 
+    this.realtime.emitToCompany(companyId, 'shifts:changed');
     return updatedOffer;
   }
 

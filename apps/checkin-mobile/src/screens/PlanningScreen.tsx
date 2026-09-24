@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, FlatList, StyleSheet, RefreshControl, Pressable } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -37,7 +37,7 @@ function isSameDay(a: Date, b: Date) {
 // Lecture seule — la création/édition d'horaires est exclusive à web-manager
 // (voir CLAUDE.md, décision d'architecture). Cet écran ne fait qu'afficher.
 export function PlanningScreen() {
-  const { user } = useAuth();
+  const { user, socket } = useAuth();
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [sites, setSites] = useState<Site[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -54,6 +54,17 @@ export function PlanningScreen() {
       void load();
     }, [load]),
   );
+
+  // Un manager peut créer/publier un shift pendant que l'employé a l'écran
+  // ouvert — voir realtime.gateway.ts côté backend.
+  useEffect(() => {
+    if (!socket) return;
+    const onShiftsChanged = () => void load();
+    socket.on('shifts:changed', onShiftsChanged);
+    return () => {
+      socket.off('shifts:changed', onShiftsChanged);
+    };
+  }, [socket, load]);
 
   const refresh = async () => {
     setIsRefreshing(true);

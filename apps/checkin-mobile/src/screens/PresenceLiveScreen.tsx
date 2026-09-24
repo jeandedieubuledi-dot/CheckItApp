@@ -71,7 +71,7 @@ function durationLabel(since: string) {
 }
 
 export function PresenceLiveScreen() {
-  const { user } = useAuth();
+  const { user, socket } = useAuth();
   const [sites, setSites] = useState<Site[]>([]);
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [present, setPresent] = useState<PresentEmployee[]>([]);
@@ -101,6 +101,18 @@ export function PresenceLiveScreen() {
       if (selectedSiteId) void loadPresence(selectedSiteId);
     }, [selectedSiteId, loadPresence]),
   );
+
+  // Cet écran n'avait pas de polling (contrairement à sa contrepartie web) —
+  // il ne se rafraîchissait qu'au focus. Le websocket le fait vivre en
+  // continu tant qu'il reste ouvert.
+  useEffect(() => {
+    if (!socket || !selectedSiteId) return;
+    const onTimeEntriesChanged = () => void loadPresence(selectedSiteId);
+    socket.on('time-entries:changed', onTimeEntriesChanged);
+    return () => {
+      socket.off('time-entries:changed', onTimeEntriesChanged);
+    };
+  }, [socket, selectedSiteId, loadPresence]);
 
   // Résout en adresse lisible les pointages GPS pour lesquels aucune distance
   // n'a pu être calculée (site sans coordonnées) — échec silencieux, retombe

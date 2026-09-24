@@ -6,7 +6,7 @@ import React, {
   useCallback,
 } from 'react';
 import * as SecureStore from 'expo-secure-store';
-import { ApiClient } from '@horaires/api-client';
+import { ApiClient, connectRealtime, type Socket } from '@horaires/api-client';
 import type { User } from '@horaires/shared-types';
 
 const ACCESS_TOKEN_KEY = 'horaires_access_token';
@@ -18,8 +18,10 @@ const USER_KEY = 'horaires_user';
 let currentAccessToken: string | null = null;
 let onUnauthorized: (() => void) | null = null;
 
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000';
+
 export const apiClient = new ApiClient({
-  baseUrl: process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000',
+  baseUrl: API_BASE_URL,
   getAccessToken: () => currentAccessToken,
   onUnauthorized: () => onUnauthorized?.(),
 });
@@ -29,6 +31,7 @@ interface AuthContextValue {
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  socket: Socket | null;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -58,6 +61,22 @@ async function clearSession() {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [socket, setSocket] = useState<Socket | null>(null);
+
+  // Connexion websocket dérivée de l'état d'auth : dès qu'un user est
+  // authentifié (login ou session restaurée depuis SecureStore), on ouvre le
+  // canal temps réel ; il se ferme automatiquement au logout.
+  useEffect(() => {
+    if (!user || !currentAccessToken) {
+      return;
+    }
+    const connection = connectRealtime(API_BASE_URL, currentAccessToken);
+    setSocket(connection);
+    return () => {
+      connection.disconnect();
+      setSocket(null);
+    };
+  }, [user]);
 
   const logout = useCallback(async () => {
     await clearSession();
@@ -99,7 +118,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, login, logout, socket }}>
       {children}
     </AuthContext.Provider>
   );

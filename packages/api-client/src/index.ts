@@ -18,6 +18,9 @@ import type {
   User,
 } from '@horaires/shared-types';
 
+export { connectRealtime } from './realtime';
+export type { Socket } from './realtime';
+
 // Client HTTP typé partagé par checkin-mobile, checkin-pos et web-manager.
 // But : écrire la logique d'appel API (gestion du token, des erreurs) une
 // seule fois plutôt que de la dupliquer dans les 3 apps.

@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, RefreshControl, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -29,7 +29,7 @@ function initials(name: string) {
 // propriétaire d'origine (voir CLAUDE.md) — candidater ici ne le lui retire
 // pas. Pas de création d'horaires ici — uniquement le cycle offer/candidater.
 export function ShiftMarketplaceScreen() {
-  const { user } = useAuth();
+  const { user, socket } = useAuth();
   const [segment, setSegment] = useState<Segment>('available');
   const [ownAssignments, setOwnAssignments] = useState<OwnAssignment[]>([]);
   const [openOffers, setOpenOffers] = useState<OpenOffer[]>([]);
@@ -73,6 +73,17 @@ export function ShiftMarketplaceScreen() {
       void load();
     }, [load]),
   );
+
+  // Une offre peut trouver preneur, être validée/rejetée, ou un nouveau
+  // collègue peut candidater pendant que cet écran reste ouvert.
+  useEffect(() => {
+    if (!socket) return;
+    const onShiftsChanged = () => void load();
+    socket.on('shifts:changed', onShiftsChanged);
+    return () => {
+      socket.off('shifts:changed', onShiftsChanged);
+    };
+  }, [socket, load]);
 
   const refresh = async () => {
     setIsRefreshing(true);

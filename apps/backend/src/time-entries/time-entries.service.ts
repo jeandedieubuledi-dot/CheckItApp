@@ -3,6 +3,7 @@ import { Prisma, TimeEntrySource, TimeEntryType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { RotatingQrService } from '../users/rotating-qr.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { AuthenticatedUser } from '../auth/current-user.decorator';
 import { AuthenticatedDevice } from '../site-devices/current-device.decorator';
 import { CreateDeviceTimeEntryDto } from './dto/create-device-time-entry.dto';
@@ -20,6 +21,7 @@ export class TimeEntriesService {
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
     private readonly rotatingQrService: RotatingQrService,
+    private readonly realtime: RealtimeGateway,
   ) {}
 
   // Le kiosk n'a pas accès à /sites/:id/presence (réservé aux managers) pour
@@ -40,6 +42,7 @@ export class TimeEntriesService {
       },
     });
 
+    this.realtime.emitToCompany(device.companyId, 'time-entries:changed');
     return { ...entry, employee: { firstName: user.firstName, lastName: user.lastName } };
   }
 
@@ -81,6 +84,7 @@ export class TimeEntriesService {
       },
     });
 
+    this.realtime.emitToCompany(device.companyId, 'time-entries:changed');
     return { ...entry, employee: { firstName: user.firstName, lastName: user.lastName } };
   }
 
@@ -111,7 +115,7 @@ export class TimeEntriesService {
       siteId = site.id;
     }
 
-    return this.prisma.timeEntry.create({
+    const entry = await this.prisma.timeEntry.create({
       data: {
         userId: user.userId,
         siteId,
@@ -123,6 +127,9 @@ export class TimeEntriesService {
         source: dto.source,
       },
     });
+
+    this.realtime.emitToCompany(user.companyId, 'time-entries:changed');
+    return entry;
   }
 
   async createManual(manager: AuthenticatedUser, dto: CreateManualTimeEntryDto) {
@@ -137,7 +144,7 @@ export class TimeEntriesService {
       throw new NotFoundException('Utilisateur introuvable');
     }
 
-    return this.prisma.timeEntry.create({
+    const entry = await this.prisma.timeEntry.create({
       data: {
         userId: dto.userId,
         siteId: dto.siteId,
@@ -148,6 +155,9 @@ export class TimeEntriesService {
         creationReason: dto.creationReason,
       },
     });
+
+    this.realtime.emitToCompany(manager.companyId, 'time-entries:changed');
+    return entry;
   }
 
   findAll(requester: AuthenticatedUser, query: FindTimeEntriesQueryDto) {
@@ -179,7 +189,7 @@ export class TimeEntriesService {
       throw new NotFoundException('Pointage introuvable');
     }
 
-    return this.prisma.timeEntry.update({
+    const updated = await this.prisma.timeEntry.update({
       where: { id },
       data: {
         ...(dto.type ? { type: dto.type } : {}),
@@ -189,6 +199,9 @@ export class TimeEntriesService {
         editReason: dto.editReason,
       },
     });
+
+    this.realtime.emitToCompany(companyId, 'time-entries:changed');
+    return updated;
   }
 
   async getPresence(companyId: string, siteId: string) {

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { colors, spacing, radius, typography, shadows } from '@horaires/ui-tokens';
 import type { PresentEmployee, Site, TimeEntrySource } from '@horaires/shared-types';
-import { apiClient } from '../services/AuthService';
+import { apiClient, useAuth } from '../services/AuthService';
 import { SiteSelect } from '../components/SiteSelect';
 
 // Libellés courts affichés sur la carte présence pour chaque mode de pointage.
@@ -43,6 +43,7 @@ function sourceBadge(employee: PresentEmployee, resolvedAddress?: string): { tex
 }
 
 export function PresenceLivePage() {
+  const { socket } = useAuth();
   const [sites, setSites] = useState<Site[]>([]);
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [present, setPresent] = useState<PresentEmployee[]>([]);
@@ -73,11 +74,22 @@ export function PresenceLivePage() {
   }, [selectedSiteId, loadPresence]);
 
   // Rafraîchit automatiquement — vue "en direct" pensée pour rester ouverte.
+  // Le polling 30s reste en filet de sécurité (socket déconnecté, backend
+  // sans websocket) ; le websocket sert juste à rafraîchir plus vite.
   useEffect(() => {
     if (!selectedSiteId) return;
     const interval = setInterval(() => loadPresence(selectedSiteId), 30_000);
     return () => clearInterval(interval);
   }, [selectedSiteId, loadPresence]);
+
+  useEffect(() => {
+    if (!socket || !selectedSiteId) return;
+    const onTimeEntriesChanged = () => void loadPresence(selectedSiteId);
+    socket.on('time-entries:changed', onTimeEntriesChanged);
+    return () => {
+      socket.off('time-entries:changed', onTimeEntriesChanged);
+    };
+  }, [socket, selectedSiteId, loadPresence]);
 
   // Résout en adresse lisible les pointages GPS pour lesquels aucune distance
   // n'a pu être calculée (site sans coordonnées) — échec silencieux : en cas

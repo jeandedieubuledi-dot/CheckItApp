@@ -428,6 +428,42 @@ Cible : PME de 20-100 employés par site.
       candidater ne finalise plus rien) se désactive après une candidature
       plutôt que de proposer un second clic sans effet visible.
 
+23. **Mises à jour en temps réel via un unique gateway WebSocket
+    (`apps/backend/src/realtime`), pas de payload fusionné côté client.**
+    - `RealtimeGateway` (socket.io, `@nestjs/websockets` +
+      `@nestjs/platform-socket.io`) authentifie chaque connexion au handshake
+      avec le même JWT que les requêtes HTTP (`socket.auth.token`), puis
+      rejoint le client à une room `company:${companyId}` — aucune autre
+      room, même isolement multi-tenant que le reste de l'API (décision #1).
+      Un token absent/invalide déconnecte immédiatement le socket.
+      `RealtimeModule` est `@Global()` : n'importe quel service injecte
+      `RealtimeGateway` sans réimport, un seul canal pour toute l'app.
+    - **checkin-pos n'y participe pas** : c'est un terminal mono-tâche
+      (pointage), sans écran multi-viewer à tenir à jour en direct.
+    - Événements volontairement grossiers — `shifts:changed`,
+      `time-entries:changed`, `availabilities:changed` — sans payload
+      exploitable (`{}`). Chaque écran réagit en rappelant sa fonction
+      `load()` existante (le même chemin que le pull-to-refresh) plutôt que
+      de fusionner un état partiel : plus simple, et chaque écran consomme
+      déjà ces données sous une forme différente (shift imbriqué dans une
+      grille, présence aplatie, etc.) — fusionner aurait dupliqué cette
+      logique de mise en forme à chaque écran.
+    - Émis par `ShiftsService` (les 8 méthodes de mutation : create, update,
+      remove, assign, offerAssignment, acceptOffer, approveOffer,
+      rejectOffer), `TimeEntriesService` (les 4 chemins de pointage +
+      update), `AvailabilitiesService` (create, update, remove) — toujours
+      juste avant le `return`, jamais avant que la transaction Prisma ait
+      committé.
+    - Côté front, `packages/api-client/src/realtime.ts` expose
+      `connectRealtime(baseUrl, token)` (force `transports: ['websocket']`,
+      plus fiable que le long-polling XHR sur React Native). Les deux
+      `AuthService.tsx` (web-manager, checkin-mobile) ouvrent la connexion
+      dès qu'un `user` est authentifié (login ou session restaurée) et la
+      ferment au logout ; le socket est exposé via `useAuth().socket`.
+    - `PresenceLivePage`/`PresenceLiveScreen` gardent leur polling existant
+      (30s web, aucun avant côté mobile) **en filet de sécurité** — le
+      websocket accélère juste le rafraîchissement, il ne le remplace pas.
+
 ## Stack
 
 - Backend : NestJS + PostgreSQL + Prisma + Passport/JWT

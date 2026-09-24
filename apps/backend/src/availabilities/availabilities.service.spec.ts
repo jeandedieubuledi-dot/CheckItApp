@@ -1,6 +1,7 @@
 import { Test } from '@nestjs/testing';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { AvailabilitiesService } from './availabilities.service';
 
 describe('AvailabilitiesService', () => {
@@ -8,6 +9,7 @@ describe('AvailabilitiesService', () => {
   let prisma: {
     availability: { create: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock; update: jest.Mock; delete: jest.Mock };
   };
+  let realtime: { emitToCompany: jest.Mock };
 
   beforeEach(async () => {
     prisma = {
@@ -19,9 +21,14 @@ describe('AvailabilitiesService', () => {
         delete: jest.fn(),
       },
     };
+    realtime = { emitToCompany: jest.fn() };
 
     const module = await Test.createTestingModule({
-      providers: [AvailabilitiesService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        AvailabilitiesService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: RealtimeGateway, useValue: realtime },
+      ],
     }).compile();
 
     service = module.get(AvailabilitiesService);
@@ -30,7 +37,7 @@ describe('AvailabilitiesService', () => {
   it('always creates the availability for the authenticated user', async () => {
     prisma.availability.create.mockResolvedValue({ id: 'avail-1' });
 
-    await service.create('user-1', {
+    await service.create('company-a', 'user-1', {
       dayOfWeek: 1,
       startTime: '09:00',
       endTime: '17:00',
@@ -39,6 +46,7 @@ describe('AvailabilitiesService', () => {
     expect(prisma.availability.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ userId: 'user-1' }),
     });
+    expect(realtime.emitToCompany).toHaveBeenCalledWith('company-a', 'availabilities:changed');
   });
 
   it('forces an employee to only see their own availabilities, ignoring ?userId=', async () => {

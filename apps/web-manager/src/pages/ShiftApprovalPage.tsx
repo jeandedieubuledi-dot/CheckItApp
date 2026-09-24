@@ -3,7 +3,7 @@ import { Check, X } from 'lucide-react';
 import { colors, spacing, radius, typography, shadows } from '@horaires/ui-tokens';
 import type { PendingShiftOffer, Site, User } from '@horaires/shared-types';
 import { ApiError } from '@horaires/api-client';
-import { apiClient } from '../services/AuthService';
+import { apiClient, useAuth } from '../services/AuthService';
 import { Dialog } from '../components/Dialog';
 
 // Page "Échanges à valider" : toutes les offres encore ouvertes du marché de
@@ -12,6 +12,7 @@ import { Dialog } from '../components/Dialog';
 // prêt à valider. Plusieurs collègues peuvent candidater sur la même offre ;
 // le manager choisit lequel approuver dans le menu déroulant.
 export function ShiftApprovalPage() {
+  const { socket } = useAuth();
   const [offers, setOffers] = useState<PendingShiftOffer[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [sites, setSites] = useState<Site[]>([]);
@@ -46,6 +47,17 @@ export function ShiftApprovalPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Un employé peut candidater (ou un autre manager valider/rejeter) pendant
+  // que cette page reste ouverte — voir realtime.gateway.ts.
+  useEffect(() => {
+    if (!socket) return;
+    const onShiftsChanged = () => void load();
+    socket.on('shifts:changed', onShiftsChanged);
+    return () => {
+      socket.off('shifts:changed', onShiftsChanged);
+    };
+  }, [socket, load]);
 
   const approve = async (offerId: string) => {
     const userId = selectedCandidate[offerId];

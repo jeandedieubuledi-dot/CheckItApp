@@ -1,14 +1,18 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { CreateAvailabilityDto } from './dto/create-availability.dto';
 import { UpdateAvailabilityDto } from './dto/update-availability.dto';
 
 @Injectable()
 export class AvailabilitiesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly realtime: RealtimeGateway,
+  ) {}
 
-  create(userId: string, dto: CreateAvailabilityDto) {
-    return this.prisma.availability.create({
+  async create(companyId: string, userId: string, dto: CreateAvailabilityDto) {
+    const availability = await this.prisma.availability.create({
       data: {
         userId,
         dayOfWeek: dto.dayOfWeek,
@@ -18,6 +22,9 @@ export class AvailabilitiesService {
         isAvailable: dto.isAvailable ?? true,
       },
     });
+
+    this.realtime.emitToCompany(companyId, 'availabilities:changed');
+    return availability;
   }
 
   findAll(companyId: string, requesterId: string, requesterRole: string, targetUserId?: string) {
@@ -46,7 +53,7 @@ export class AvailabilitiesService {
   ) {
     await this.findOwned(companyId, requesterId, requesterRole, id);
 
-    return this.prisma.availability.update({
+    const updated = await this.prisma.availability.update({
       where: { id },
       data: {
         ...(dto.dayOfWeek !== undefined ? { dayOfWeek: dto.dayOfWeek } : {}),
@@ -56,11 +63,15 @@ export class AvailabilitiesService {
         ...(dto.isAvailable !== undefined ? { isAvailable: dto.isAvailable } : {}),
       },
     });
+
+    this.realtime.emitToCompany(companyId, 'availabilities:changed');
+    return updated;
   }
 
   async remove(companyId: string, requesterId: string, requesterRole: string, id: string) {
     await this.findOwned(companyId, requesterId, requesterRole, id);
     await this.prisma.availability.delete({ where: { id } });
+    this.realtime.emitToCompany(companyId, 'availabilities:changed');
   }
 
   // Availability n'a pas de companyId propre — scopée via la relation user.
