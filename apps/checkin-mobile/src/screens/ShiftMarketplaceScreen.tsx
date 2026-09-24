@@ -3,12 +3,12 @@ import { View, Text, ScrollView, Pressable, StyleSheet, RefreshControl, Activity
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, typography } from '@horaires/ui-tokens';
-import type { Shift, ShiftAssignment, ShiftOffer, Site, User } from '@horaires/shared-types';
+import type { Shift, ShiftAssignment, Site, User } from '@horaires/shared-types';
 import { apiClient, useAuth } from '../services/AuthService';
 import { fonts } from '../theme';
 
 type OwnAssignment = { kind: 'own'; id: string; shift: Shift; assignment: ShiftAssignment };
-type OpenOffer = { kind: 'offer'; id: string; shift: Shift; assignment: ShiftAssignment; offer: ShiftOffer };
+type OpenOffer = { kind: 'offer'; id: string; shift: Shift; offeredBy: string };
 type Row = OwnAssignment | OpenOffer;
 type Segment = 'available' | 'mine';
 
@@ -35,41 +35,30 @@ export function ShiftMarketplaceScreen() {
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    // Deux sources distinctes : GET /shifts ne renvoie jamais que les shifts
-    // de l'appelant (voir CLAUDE.md) — impossible d'y trouver les offres des
-    // collègues. GET /shift-offers est le seul endroit où un employé voit
-    // des shifts qui ne sont pas les siens, volontairement limité aux
-    // offres ouvertes faites par quelqu'un d'autre.
-    const [myShifts, marketplaceShifts, userList, siteList] = await Promise.all([
+    const [shifts, offers, userList, siteList] = await Promise.all([
       apiClient.getShifts(),
-      apiClient.getMarketplaceOffers(),
+      apiClient.getOpenShiftOffers(),
       apiClient.getUsers(),
       apiClient.getSites(),
     ]);
     setUsers(userList);
     setSites(siteList);
 
+    // "Mes échanges" : mes propres shifts encore assignés, que je peux
+    // proposer. getShifts ne renvoie que mes shifts, d'où le scan local.
     const mine: OwnAssignment[] = [];
-    for (const shift of myShifts) {
+    for (const shift of shifts) {
       for (const assignment of shift.assignments ?? []) {
         if (assignment.userId === user?.id && assignment.status === 'assigned') {
           mine.push({ kind: 'own', id: assignment.id, shift, assignment });
         }
       }
     }
-
-    const open: OpenOffer[] = [];
-    for (const shift of marketplaceShifts) {
-      for (const assignment of shift.assignments ?? []) {
-        for (const offer of assignment.offers ?? []) {
-          if (offer.status === 'open' && offer.offeredBy !== user?.id) {
-            open.push({ kind: 'offer', id: offer.id, shift, assignment, offer });
-          }
-        }
-      }
-    }
     setOwnAssignments(mine);
-    setOpenOffers(open);
+
+    // "Disponibles" : offres ouvertes des collègues, via l'endpoint dédié
+    // (l'API exclut déjà les miennes).
+    setOpenOffers(offers.map((o) => ({ kind: 'offer', id: o.id, shift: o.shift, offeredBy: o.offeredBy })));
   }, [user?.id]);
 
   useFocusEffect(
@@ -120,7 +109,6 @@ export function ShiftMarketplaceScreen() {
   const rows: Row[] = segment === 'available' ? openOffers : ownAssignments;
 
   const renderRow = (row: Row) => {
-    const isOwn = row.kind === 'own';
     const busy = busyId === row.id;
     return (
       <View key={row.id} style={styles.card}>
@@ -131,24 +119,24 @@ export function ShiftMarketplaceScreen() {
           <Text style={styles.cardSiteText}>{siteName(row.shift.siteId)}</Text>
         </View>
 
-        {!isOwn ? (
+        {row.kind === 'offer' ? (
           <View style={styles.byRow}>
             <View style={styles.miniAvatar}>
-              <Text style={styles.miniAvatarText}>{initials(userName(row.offer.offeredBy))}</Text>
+              <Text style={styles.miniAvatarText}>{initials(userName(row.offeredBy))}</Text>
             </View>
-            <Text style={styles.byName}>Proposé par {userName(row.offer.offeredBy)}</Text>
+            <Text style={styles.byName}>Proposé par {userName(row.offeredBy)}</Text>
           </View>
         ) : null}
 
         <Pressable
           style={styles.acceptBtn}
           disabled={busy}
-          onPress={() => (isOwn ? offerShift(row.assignment.id) : acceptOffer(row.offer.id))}
+          onPress={() => (row.kind === 'own' ? offerShift(row.assignment.id) : acceptOffer(row.id))}
         >
           {busy ? (
             <ActivityIndicator color={colors.surface} size="small" />
           ) : (
-            <Text style={styles.acceptBtnText}>{isOwn ? 'Proposer' : 'Accepter'}</Text>
+            <Text style={styles.acceptBtnText}>{row.kind === 'own' ? 'Proposer' : 'Accepter'}</Text>
           )}
         </Pressable>
       </View>

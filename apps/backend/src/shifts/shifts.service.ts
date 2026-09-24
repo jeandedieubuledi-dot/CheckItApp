@@ -72,34 +72,6 @@ export class ShiftsService {
     });
   }
 
-  // Seul endroit où un employé voit des shifts qui ne sont pas les siens —
-  // le marché d'échange (voir checkin-mobile ShiftMarketplaceScreen). Portée
-  // volontairement étroite : uniquement les shifts avec une offre ouverte
-  // faite par un AUTRE employé (jamais le planning complet d'un collègue,
-  // voir findAll ci-dessus), et jamais un brouillon (cohérent avec le
-  // workflow brouillon/publication).
-  findMarketplaceOffers(user: AuthenticatedUser) {
-    return this.prisma.shift.findMany({
-      where: {
-        site: { companyId: user.companyId },
-        status: 'published',
-        assignments: {
-          some: {
-            status: 'offered',
-            offers: { some: { status: 'open', offeredBy: { not: user.userId } } },
-          },
-        },
-      },
-      include: {
-        assignments: {
-          where: { status: 'offered' },
-          include: { offers: { where: { status: 'open' } } },
-        },
-      },
-      orderBy: { startsAt: 'asc' },
-    });
-  }
-
   async findOne(companyId: string, id: string) {
     const shift = await this.prisma.shift.findFirst({
       where: { id, site: { companyId } },
@@ -109,6 +81,31 @@ export class ShiftsService {
       throw new NotFoundException('Shift introuvable');
     }
     return shift;
+  }
+
+  // Marché de shifts : les offres d'échange encore ouvertes de toute
+  // l'entreprise, visibles par n'importe quel employé pour qu'il puisse les
+  // reprendre — sauf les siennes. Séparé de findAll (qui reste strictement
+  // "mes shifts") pour ne pas faire fuiter le planning des collègues dans
+  // l'écran Planning.
+  async listOpenOffers(companyId: string, requesterId: string) {
+    const offers = await this.prisma.shiftOffer.findMany({
+      where: {
+        status: 'open',
+        offeredBy: { not: requesterId },
+        shiftAssignment: { shift: { site: { companyId } } },
+      },
+      include: { shiftAssignment: { include: { shift: true } } },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return offers.map((offer) => ({
+      id: offer.id,
+      shiftId: offer.shiftAssignment.shiftId,
+      shift: offer.shiftAssignment.shift,
+      offeredBy: offer.offeredBy,
+      createdAt: offer.createdAt,
+    }));
   }
 
   async update(companyId: string, id: string, dto: UpdateShiftDto) {
@@ -175,7 +172,15 @@ export class ShiftsService {
       throw new NotFoundException('Utilisateur introuvable');
     }
 
-    await this.ensureAvailable(dto.userId, shift.startsAt, shift.endsAt);
+    // Les heures d'une Availability ("HH:mm") sont déclarées en heure locale
+    // du site ; le shift est stocké en UTC. Il faut le fuseau du site pour
+    // comparer les deux sans décalage (voir ensureAvailable).
+    const site = await this.prisma.site.findFirst({
+      where: { id: shift.siteId, companyId },
+      select: { timezone: true },
+    });
+
+    await this.ensureAvailable(dto.userId, shift.startsAt, shift.endsAt, site?.timezone ?? 'Europe/Brussels');
     await this.ensureNoOverlap(dto.userId, shift.startsAt, shift.endsAt, shiftId);
 
     return this.prisma.shiftAssignment.create({
@@ -352,10 +357,21 @@ export class ShiftsService {
   // bloque par défaut plutôt que d'assigner par erreur, voir brief). Une
   // disponibilité ponctuelle (specificDate) pour le jour exact prime sur
   // une disponibilité récurrente (dayOfWeek) du même jour.
-  private async ensureAvailable(userId: string, startsAt: Date, endsAt: Date) {
-    const dayStart = new Date(Date.UTC(startsAt.getUTCFullYear(), startsAt.getUTCMonth(), startsAt.getUTCDate()));
+  //
+  // Le shift est stocké en UTC, mais les heures d'une Availability ("HH:mm")
+  // et son jour de la semaine se raisonnent en heure LOCALE du site : on
+  // ramène donc le shift dans le fuseau du site avant toute comparaison,
+  // sinon un décalage d'1–2 h (heure d'hiver / d'été) fait rejeter des
+  // créneaux valides le matin et accepter des créneaux invalides le soir.
+  private async ensureAvailable(userId: string, startsAt: Date, endsAt: Date, timezone: string) {
+    const start = zonedParts(startsAt, timezone);
+    const end = zonedParts(endsAt, timezone);
+
+    // Jour civil du shift dans le fuseau du site (minuit UTC de cette date) —
+    // pour la recherche par specificDate et par jour de la semaine.
+    const dayStart = new Date(Date.UTC(start.year, start.month - 1, start.day));
     const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
-    const dayOfWeek = (startsAt.getUTCDay() + 6) % 7; // lundi = 0, même convention que le reste de l'app
+    const dayOfWeek = start.weekday; // lundi = 0, même convention que le reste de l'app
 
     const specific = await this.prisma.availability.findFirst({
       where: { userId, specificDate: { gte: dayStart, lt: dayEnd } },
@@ -367,16 +383,22 @@ export class ShiftsService {
       }));
 
     const dateLabel = formatDate(dayStart);
-    const shiftRangeLabel = `${formatTime(startsAt)} et ${formatTime(endsAt)}`;
+    const shiftRangeLabel = `${formatMinutes(start.minutesOfDay)} et ${formatMinutes(end.minutesOfDay)}`;
 
     if (!availability) {
       throw new ConflictException(`Cet employé n'est pas disponible le ${dateLabel} entre ${shiftRangeLabel}`);
     }
 
+    // Un shift de nuit peut finir le lendemain en heure locale — on place
+    // alors la fin sur une échelle > 24 h pour toutes les comparaisons
+    // ci-dessous.
+    const dayDiff = Math.round((Date.UTC(end.year, end.month - 1, end.day) - dayStart.getTime()) / 86_400_000);
+    const shiftEndMinutes = end.minutesOfDay + dayDiff * 24 * 60;
+
     if (availability.isAvailable) {
-      const availStart = timeOnDay(dayStart, availability.startTime);
-      const availEnd = timeOnDay(dayStart, availability.endTime);
-      if (startsAt < availStart || endsAt > availEnd) {
+      const availStartMinutes = parseHhmm(availability.startTime);
+      const availEndMinutes = parseHhmm(availability.endTime);
+      if (start.minutesOfDay < availStartMinutes || shiftEndMinutes > availEndMinutes) {
         throw new ConflictException(
           `Cet employé n'est disponible que de ${availability.startTime} à ${availability.endTime} le ${dateLabel}, ` +
             `en dehors du créneau du shift (${shiftRangeLabel})`,
@@ -388,16 +410,16 @@ export class ShiftsService {
     // isAvailable: false — bloque toute la journée par défaut. L'employé a pu
     // restreindre son indisponibilité à une plage précise (écran
     // Disponibilités, "Préciser une plage horaire" — voir FULL_DAY_START/END) :
-    // dans ce cas seul un shift qui chevauche cette plage est refusé, le reste
-    // de la journée reste assignable.
+    // dans ce cas seul un shift qui chevauche cette plage (en heure locale du
+    // site) est refusé, le reste de la journée reste assignable.
     const isFullDayBlock = availability.startTime === FULL_DAY_START && availability.endTime === FULL_DAY_END;
     if (isFullDayBlock) {
       throw new ConflictException(`Cet employé n'est pas disponible le ${dateLabel} entre ${shiftRangeLabel}`);
     }
 
-    const blockStart = timeOnDay(dayStart, availability.startTime);
-    const blockEnd = timeOnDay(dayStart, availability.endTime);
-    const overlapsBlock = startsAt < blockEnd && endsAt > blockStart;
+    const blockStartMinutes = parseHhmm(availability.startTime);
+    const blockEndMinutes = parseHhmm(availability.endTime);
+    const overlapsBlock = start.minutesOfDay < blockEndMinutes && shiftEndMinutes > blockStartMinutes;
     if (overlapsBlock) {
       throw new ConflictException(
         `Cet employé a déclaré être indisponible de ${availability.startTime} à ${availability.endTime} le ` +
@@ -421,13 +443,54 @@ function formatDate(d: Date): string {
   return `${pad(d.getUTCDate())}/${pad(d.getUTCMonth() + 1)}/${d.getUTCFullYear()}`;
 }
 
-function formatTime(d: Date): string {
-  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+function formatMinutes(minutesOfDay: number): string {
+  const m = ((minutesOfDay % 1440) + 1440) % 1440;
+  return `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
 }
 
-// Combine un jour (minuit UTC) avec une heure "HH:mm" déclarée dans une
-// Availability, pour pouvoir la comparer aux bornes startsAt/endsAt du shift.
-function timeOnDay(dayStart: Date, hhmm: string): Date {
+function parseHhmm(hhmm: string): number {
   const [h, m] = hhmm.split(':').map(Number);
-  return new Date(dayStart.getTime() + h * 60 * 60 * 1000 + m * 60 * 1000);
+  return h * 60 + m;
+}
+
+const WEEKDAY_INDEX: Record<string, number> = {
+  Mon: 0,
+  Tue: 1,
+  Wed: 2,
+  Thu: 3,
+  Fri: 4,
+  Sat: 5,
+  Sun: 6,
+};
+
+// Décompose un instant (Date UTC) dans un fuseau IANA donné (ex:
+// "Europe/Brussels"), pour comparer un shift stocké en UTC aux heures
+// locales déclarées dans une Availability.
+function zonedParts(
+  instant: Date,
+  timeZone: string,
+): { year: number; month: number; day: number; weekday: number; minutesOfDay: number } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+    weekday: 'short',
+  })
+    .formatToParts(instant)
+    .reduce<Record<string, string>>((acc, p) => {
+      acc[p.type] = p.value;
+      return acc;
+    }, {});
+
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    weekday: WEEKDAY_INDEX[parts.weekday] ?? 0,
+    minutesOfDay: Number(parts.hour) * 60 + Number(parts.minute),
+  };
 }

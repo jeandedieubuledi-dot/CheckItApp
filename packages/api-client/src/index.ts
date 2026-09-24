@@ -5,6 +5,7 @@ import type {
   DeviceAuthResponse,
   DeviceTimeEntryResult,
   GeocodeCandidate,
+  OpenShiftOffer,
   PresentEmployee,
   RotatingQrCode,
   Shift,
@@ -259,13 +260,6 @@ export class ApiClient {
     return this.request<Shift[]>('GET', `/shifts${toQueryString(params)}`);
   }
 
-  // Marché d'échange : shifts assignés à d'AUTRES employés mais avec une
-  // offre ouverte — seul cas où GET /shifts ne suffit pas (il ne renvoie
-  // jamais que les shifts de l'appelant lui-même, voir CLAUDE.md).
-  getMarketplaceOffers() {
-    return this.request<Shift[]>('GET', '/shift-offers');
-  }
-
   // Écriture réservée en pratique à web-manager (choix produit — un manager
   // reste autorisé par son rôle quel que soit le client, voir CLAUDE.md).
   createShift(payload: {
@@ -297,6 +291,12 @@ export class ApiClient {
 
   assignShift(shiftId: string, userId: string) {
     return this.request<ShiftAssignment>('POST', `/shifts/${shiftId}/assign`, { userId });
+  }
+
+  // Marché de shifts : offres d'échange ouvertes des collègues (jamais les
+  // siennes). Séparé de getShifts, qui ne renvoie que les shifts de l'employé.
+  getOpenShiftOffers() {
+    return this.request<OpenShiftOffer[]>('GET', '/shift-offers');
   }
 
   offerShiftAssignment(assignmentId: string) {

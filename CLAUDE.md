@@ -340,25 +340,49 @@ Cible : PME de 20-100 employés par site.
     côté client (`isRecurringApplied` / `isRecurringPaused`).
 
 20. **`GET /shift-offers` est le SEUL endroit où un employé voit des shifts
-    qui ne sont pas les siens** — ajouté après coup pour corriger une
-    régression du marché d'échange (checkin-mobile
-    `ShiftMarketplaceScreen`) : `GET /shifts` ne renvoie jamais que les
+    qui ne sont pas les siens.** `GET /shifts` ne renvoie jamais que les
     shifts de l'appelant pour un employé (`assignments: { some: { userId }
-    }`, décision #11), donc dériver les offres ouvertes des collègues à
-    partir de `getShifts()` (comme le faisait l'écran avant cette
-    correction) ne pouvait structurellement jamais rien trouver — un
-    employé recevait toujours *ses propres* offres, jamais celles d'un
-    autre. `ShiftsService.findMarketplaceOffers` renvoie les shifts ayant
-    au moins une assignation `status: 'offered'` avec une offre
-    `status: 'open'` faite par quelqu'un d'AUTRE que l'appelant
-    (`offeredBy: { not: user.userId }`), scopés à l'entreprise et jamais un
-    brouillon (cohérent avec le workflow de publication, décision #15).
-    Portée volontairement étroite : uniquement ces shifts-offres précis,
-    jamais le planning complet d'un collègue — ne pas élargir ce filtre
-    sans décision produit explicite. L'écran fait maintenant deux appels
-    distincts : `getShifts()` pour « Mes échanges » (shifts propres,
-    inchangé), `getMarketplaceOffers()` (`GET /shift-offers`) pour
-    « Disponibles ».
+    }`, décision #11) — dériver les offres ouvertes des collègues à partir
+    de `getShifts()` (comme le faisait initialement l'écran
+    `ShiftMarketplaceScreen`) ne pouvait donc structurellement jamais rien
+    trouver : un employé ne recevait toujours que *ses propres* offres.
+    `ShiftsService.listOpenOffers(companyId, requesterId)` interroge
+    directement `ShiftOffer` (`status: 'open'`, `offeredBy: { not:
+    requesterId }`, scopé à l'entreprise via `shiftAssignment.shift.site`)
+    et renvoie une forme aplatie dédiée (`OpenShiftOffer` dans
+    `shared-types` : `{ id, shiftId, shift, offeredBy, createdAt }`) plutôt
+    que des `Shift[]` imbriqués — plus simple à consommer côté écran que de
+    refouiller des `assignments[].offers[]`. Portée volontairement étroite :
+    uniquement les offres encore ouvertes, jamais le planning complet d'un
+    collègue — ne pas élargir ce filtre sans décision produit explicite.
+    L'écran fait deux appels distincts : `getShifts()` pour « Mes
+    échanges » (shifts propres, inchangé), `getOpenShiftOffers()`
+    (`GET /shift-offers`) pour « Disponibles ».
+    *Note historique* : ce bug a été corrigé indépendamment par deux
+    sessions Claude Code en parallèle sur ce dépôt (deux implémentations
+    quasi identiques poussées à quelques minutes d'écart) — la seconde à
+    pousser a dû fusionner manuellement les deux ; c'est la version
+    `listOpenOffers`/`OpenShiftOffer` ci-dessus qui a été retenue.
+
+21. **`ShiftsService.ensureAvailable` compare les horaires dans le fuseau du
+    SITE, jamais en UTC brut.** Un `Shift` est stocké en UTC, mais les
+    heures `HH:mm` d'une `Availability` et son `dayOfWeek` sont déclarés en
+    heure locale du site — les comparer sans conversion décale tout d'1 à 2h
+    selon l'heure d'été/hiver (un shift 09:00 locale à Bruxelles est 07:00Z
+    l'été : comparé tel quel à une dispo "08:00-16:00", il semblait
+    commencer AVANT l'ouverture). `assign()` charge le fuseau du site
+    (`Site.timezone`, défaut `Europe/Brussels`) et `ensureAvailable`
+    décompose chaque borne via `Intl.DateTimeFormat` (`zonedParts`) en
+    année/mois/jour/jour-de-semaine/minutes-du-jour LOCAUX avant toute
+    comparaison — jamais de `Date` UTC comparées directement à une chaîne
+    `HH:mm`. Un shift de nuit dont la fin tombe le lendemain en heure locale
+    voit sa fin exprimée sur une échelle > 24h (`shiftEndMinutes = fin +
+    joursDeDécalage × 1440`) plutôt que rembobinée à minuit — sans ça, un
+    22h-06h locale se ferait comparer une fin "avant" son propre début.
+    Cette conversion est partagée par les deux branches de la fonction
+    (fenêtre disponible ET plage d'indisponibilité partielle, décision #8) :
+    ne jamais réintroduire une comparaison sur les `Date` UTC brutes du
+    shift dans l'une des deux sans l'autre, elles doivent rester cohérentes.
 
 ## Stack
 
