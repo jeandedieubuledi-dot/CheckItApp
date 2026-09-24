@@ -9,6 +9,7 @@ import { ShiftsService } from './shifts.service';
 import { CreateShiftDto } from './dto/create-shift.dto';
 import { UpdateShiftDto } from './dto/update-shift.dto';
 import { AssignShiftDto } from './dto/assign-shift.dto';
+import { ApproveShiftOfferDto } from './dto/approve-shift-offer.dto';
 import { FindShiftsQueryDto } from './dto/find-shifts-query.dto';
 
 @ApiTags('shifts')
@@ -33,6 +34,16 @@ export class ShiftsController {
   @Get('shift-offers')
   listOpenOffers(@CurrentUser() user: AuthenticatedUser) {
     return this.shiftsService.listOpenOffers(user.companyId, user.userId);
+  }
+
+  // Page "Échanges à valider" (web-manager) : toutes les offres encore
+  // ouvertes, candidatures comprises (même vides) — voir
+  // ShiftsService.listPendingOffersForManager.
+  @Get('shift-offers/pending')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'manager')
+  listPendingOffers(@CurrentUser() user: AuthenticatedUser) {
+    return this.shiftsService.listPendingOffersForManager(user.companyId);
   }
 
   // Écriture réservée en pratique au client web-manager (choix produit, pas
@@ -78,11 +89,13 @@ export class ShiftsController {
     return this.shiftsService.acceptOffer(user.companyId, user, id);
   }
 
+  // Plusieurs collègues peuvent candidater sur la même offre — le manager
+  // choisit lequel approuver (dto.userId), voir ShiftsService.approveOffer.
   @Post('shift-offers/:id/approve')
   @UseGuards(RolesGuard)
   @Roles('admin', 'manager')
-  approveOffer(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
-    return this.shiftsService.approveOffer(user.companyId, id);
+  approveOffer(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() dto: ApproveShiftOfferDto) {
+    return this.shiftsService.approveOffer(user.companyId, id, dto);
   }
 
   @Post('shift-offers/:id/reject')

@@ -119,6 +119,7 @@ model User {
   editedTimeEntries   TimeEntry[]       @relation("EditedByManager")
   createdTimeEntries  TimeEntry[]       @relation("CreatedByManager")
   shiftAssignments    ShiftAssignment[]
+  shiftOfferCandidacies ShiftOfferCandidate[]
   availabilities      Availability[]
   auditLogs           AuditLog[]
 
@@ -196,13 +197,36 @@ model ShiftOffer {
   shiftAssignmentId       String          @map("shift_assignment_id")
   shiftAssignment         ShiftAssignment @relation(fields: [shiftAssignmentId], references: [id])
   offeredBy               String          @map("offered_by")
+  // Renseigné seulement une fois l'offre résolue (status: approved) — le
+  // candidat que le manager a choisi. Tant que l'offre est "open", les
+  // candidatures se trouvent dans `candidates`, pas ici : plusieurs
+  // collègues peuvent candidater avant que le manager n'en choisisse un.
   acceptedBy              String?         @map("accepted_by")
   status                  OfferStatus     @default(open)
   requiresManagerApproval Boolean         @default(true) @map("requires_manager_approval")
   createdAt               DateTime        @default(now()) @map("created_at")
   resolvedAt              DateTime?       @map("resolved_at")
 
+  candidates ShiftOfferCandidate[]
+
   @@map("shift_offers")
+}
+
+// Un collègue candidat sur une offre encore ouverte — plusieurs candidatures
+// possibles par offre, le manager choisit laquelle approuver (voir
+// ShiftsService.approveOffer). Distinct de ShiftOffer.acceptedBy, qui ne
+// représente que le choix final une fois l'offre résolue.
+model ShiftOfferCandidate {
+  id        String     @id @default(uuid())
+  offerId   String     @map("offer_id")
+  offer     ShiftOffer @relation(fields: [offerId], references: [id])
+  userId    String     @map("user_id")
+  user      User       @relation(fields: [userId], references: [id])
+  createdAt DateTime   @default(now()) @map("created_at")
+
+  // Un même employé ne candidate qu'une fois par offre.
+  @@unique([offerId, userId])
+  @@map("shift_offer_candidates")
 }
 
 model Availability {

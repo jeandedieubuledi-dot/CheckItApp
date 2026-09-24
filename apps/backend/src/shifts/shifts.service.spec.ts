@@ -24,6 +24,11 @@ describe('ShiftsService', () => {
       update: jest.Mock;
       deleteMany: jest.Mock;
     };
+    shiftOfferCandidate: {
+      create: jest.Mock;
+      findFirst: jest.Mock;
+      deleteMany: jest.Mock;
+    };
     $transaction: jest.Mock;
   };
 
@@ -51,6 +56,11 @@ describe('ShiftsService', () => {
         findFirst: jest.fn(),
         findMany: jest.fn(),
         update: jest.fn(),
+        deleteMany: jest.fn(),
+      },
+      shiftOfferCandidate: {
+        create: jest.fn(),
+        findFirst: jest.fn(),
         deleteMany: jest.fn(),
       },
       $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
@@ -517,7 +527,7 @@ describe('ShiftsService', () => {
   });
 
   describe('listOpenOffers', () => {
-    it('returns other colleagues\' open offers in the company, mapped for the marketplace', async () => {
+    it("returns other colleagues' open offers in the company, mapped for the marketplace, with hasApplied", async () => {
       prisma.shiftOffer.findMany.mockResolvedValue([
         {
           id: 'offer-1',
@@ -527,6 +537,7 @@ describe('ShiftsService', () => {
             shiftId: 'shift-9',
             shift: { id: 'shift-9', siteId: 'site-1', startsAt: 'x', endsAt: 'y' },
           },
+          candidates: [{ id: 'candidate-1', offerId: 'offer-1', userId: 'user-1' }],
         },
       ]);
 
@@ -538,7 +549,10 @@ describe('ShiftsService', () => {
           offeredBy: { not: 'user-1' },
           shiftAssignment: { shift: { site: { companyId: 'company-a' } } },
         },
-        include: { shiftAssignment: { include: { shift: true } } },
+        include: {
+          shiftAssignment: { include: { shift: true } },
+          candidates: { where: { userId: 'user-1' } },
+        },
         orderBy: { createdAt: 'asc' },
       });
       expect(result).toEqual([
@@ -548,6 +562,48 @@ describe('ShiftsService', () => {
           shift: { id: 'shift-9', siteId: 'site-1', startsAt: 'x', endsAt: 'y' },
           offeredBy: 'colleague-2',
           createdAt: new Date('2026-09-01T10:00:00.000Z'),
+          hasApplied: true,
+        },
+      ]);
+    });
+  });
+
+  describe('listPendingOffersForManager', () => {
+    it('returns every open offer in the company with its candidates, even when empty', async () => {
+      prisma.shiftOffer.findMany.mockResolvedValue([
+        {
+          id: 'offer-1',
+          offeredBy: 'colleague-1',
+          createdAt: new Date('2026-09-01T10:00:00.000Z'),
+          shiftAssignment: {
+            shiftId: 'shift-9',
+            shift: { id: 'shift-9', siteId: 'site-1', startsAt: 'x', endsAt: 'y' },
+          },
+          candidates: [],
+        },
+      ]);
+
+      const result = await service.listPendingOffersForManager('company-a');
+
+      expect(prisma.shiftOffer.findMany).toHaveBeenCalledWith({
+        where: {
+          status: 'open',
+          shiftAssignment: { shift: { site: { companyId: 'company-a' } } },
+        },
+        include: {
+          shiftAssignment: { include: { shift: true } },
+          candidates: { orderBy: { createdAt: 'asc' } },
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+      expect(result).toEqual([
+        {
+          id: 'offer-1',
+          shiftId: 'shift-9',
+          shift: { id: 'shift-9', siteId: 'site-1', startsAt: 'x', endsAt: 'y' },
+          offeredBy: 'colleague-1',
+          createdAt: new Date('2026-09-01T10:00:00.000Z'),
+          candidates: [],
         },
       ]);
     });
@@ -639,14 +695,14 @@ describe('ShiftsService', () => {
           'offer-1',
         ),
       ).rejects.toThrow(ForbiddenException);
-      expect(prisma.shiftAssignment.update).not.toHaveBeenCalled();
+      expect(prisma.shiftOfferCandidate.create).not.toHaveBeenCalled();
     });
 
     it('rejects accepting an offer that is no longer open', async () => {
       prisma.shiftOffer.findFirst.mockResolvedValue({
         id: 'offer-1',
         offeredBy: 'user-1',
-        status: 'accepted',
+        status: 'approved',
         shiftAssignmentId: 'assignment-1',
         requiresManagerApproval: true,
         shiftAssignment: shiftAssignment1,
@@ -661,6 +717,27 @@ describe('ShiftsService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
+    it('rejects a colleague who already candidated for this offer', async () => {
+      prisma.shiftOffer.findFirst.mockResolvedValue({
+        id: 'offer-1',
+        offeredBy: 'user-1',
+        status: 'open',
+        shiftAssignmentId: 'assignment-1',
+        requiresManagerApproval: true,
+        shiftAssignment: shiftAssignment1,
+      });
+      prisma.shiftOfferCandidate.findFirst.mockResolvedValue({ id: 'candidate-1', offerId: 'offer-1', userId: 'user-2' });
+
+      await expect(
+        service.acceptOffer(
+          'company-a',
+          { userId: 'user-2', companyId: 'company-a', role: 'employee' },
+          'offer-1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.shiftOfferCandidate.create).not.toHaveBeenCalled();
+    });
+
     it('rejects accepting when the colleague already has an overlapping shift', async () => {
       prisma.shiftOffer.findFirst.mockResolvedValue({
         id: 'offer-1',
@@ -670,6 +747,7 @@ describe('ShiftsService', () => {
         requiresManagerApproval: true,
         shiftAssignment: shiftAssignment1,
       });
+      prisma.shiftOfferCandidate.findFirst.mockResolvedValue(null);
       prisma.shiftAssignment.findFirst.mockResolvedValue({
         id: 'assignment-conflict',
         shift: {
@@ -685,10 +763,10 @@ describe('ShiftsService', () => {
           'offer-1',
         ),
       ).rejects.toThrow(ConflictException);
-      expect(prisma.shiftAssignment.update).not.toHaveBeenCalled();
+      expect(prisma.shiftOfferCandidate.create).not.toHaveBeenCalled();
     });
 
-    it('moves assignment to swap_pending when manager approval is required', async () => {
+    it('records a candidacy without changing the offer or the assignment — several colleagues can candidate', async () => {
       prisma.shiftOffer.findFirst.mockResolvedValue({
         id: 'offer-1',
         offeredBy: 'user-1',
@@ -697,9 +775,9 @@ describe('ShiftsService', () => {
         requiresManagerApproval: true,
         shiftAssignment: shiftAssignment1,
       });
+      prisma.shiftOfferCandidate.findFirst.mockResolvedValue(null);
       prisma.shiftAssignment.findFirst.mockResolvedValue(null);
-      prisma.shiftAssignment.update.mockResolvedValue({ id: 'assignment-1', status: 'swap_pending' });
-      prisma.shiftOffer.update.mockResolvedValue({ id: 'offer-1', status: 'accepted' });
+      prisma.shiftOfferCandidate.create.mockResolvedValue({ id: 'candidate-1', offerId: 'offer-1', userId: 'user-2' });
 
       const result = await service.acceptOffer(
         'company-a',
@@ -707,44 +785,12 @@ describe('ShiftsService', () => {
         'offer-1',
       );
 
-      expect(prisma.shiftAssignment.update).toHaveBeenCalledWith({
-        where: { id: 'assignment-1' },
-        data: { status: 'swap_pending' },
+      expect(prisma.shiftOfferCandidate.create).toHaveBeenCalledWith({
+        data: { offerId: 'offer-1', userId: 'user-2' },
       });
-      expect(prisma.shiftOffer.update).toHaveBeenCalledWith({
-        where: { id: 'offer-1' },
-        data: { acceptedBy: 'user-2', status: 'accepted' },
-      });
-      expect(result).toEqual({ id: 'offer-1', status: 'accepted' });
-    });
-
-    it('finalizes the swap immediately when no manager approval is required', async () => {
-      prisma.shiftOffer.findFirst.mockResolvedValue({
-        id: 'offer-1',
-        offeredBy: 'user-1',
-        status: 'open',
-        shiftAssignmentId: 'assignment-1',
-        requiresManagerApproval: false,
-        shiftAssignment: shiftAssignment1,
-      });
-      prisma.shiftAssignment.findFirst.mockResolvedValue(null);
-      prisma.shiftAssignment.update.mockResolvedValue({ id: 'assignment-1', status: 'confirmed' });
-      prisma.shiftOffer.update.mockResolvedValue({ id: 'offer-1', status: 'approved' });
-
-      await service.acceptOffer(
-        'company-a',
-        { userId: 'user-2', companyId: 'company-a', role: 'employee' },
-        'offer-1',
-      );
-
-      expect(prisma.shiftAssignment.update).toHaveBeenCalledWith({
-        where: { id: 'assignment-1' },
-        data: { userId: 'user-2', status: 'confirmed' },
-      });
-      expect(prisma.shiftOffer.update).toHaveBeenCalledWith({
-        where: { id: 'offer-1' },
-        data: expect.objectContaining({ acceptedBy: 'user-2', status: 'approved' }),
-      });
+      expect(prisma.shiftAssignment.update).not.toHaveBeenCalled();
+      expect(prisma.shiftOffer.update).not.toHaveBeenCalled();
+      expect(result).toEqual({ id: 'candidate-1', offerId: 'offer-1', userId: 'user-2' });
     });
   });
 
@@ -757,7 +803,23 @@ describe('ShiftsService', () => {
       },
     };
 
-    it('refuses to approve an offer not awaiting manager approval', async () => {
+    it('refuses to approve an offer that is not open', async () => {
+      prisma.shiftOffer.findFirst.mockResolvedValue({
+        id: 'offer-1',
+        status: 'approved',
+        requiresManagerApproval: true,
+        acceptedBy: 'user-2',
+        shiftAssignmentId: 'assignment-1',
+        shiftAssignment: shiftAssignment1,
+      });
+
+      await expect(service.approveOffer('company-a', 'offer-1', { userId: 'user-2' })).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.shiftAssignment.update).not.toHaveBeenCalled();
+    });
+
+    it("refuses to approve a user who hasn't candidated for this offer", async () => {
       prisma.shiftOffer.findFirst.mockResolvedValue({
         id: 'offer-1',
         status: 'open',
@@ -766,22 +828,24 @@ describe('ShiftsService', () => {
         shiftAssignmentId: 'assignment-1',
         shiftAssignment: shiftAssignment1,
       });
+      prisma.shiftOfferCandidate.findFirst.mockResolvedValue(null);
 
-      await expect(service.approveOffer('company-a', 'offer-1')).rejects.toThrow(
-        BadRequestException,
+      await expect(service.approveOffer('company-a', 'offer-1', { userId: 'user-2' })).rejects.toThrow(
+        NotFoundException,
       );
       expect(prisma.shiftAssignment.update).not.toHaveBeenCalled();
     });
 
-    it('rejects approving when the accepted colleague now has an overlapping shift', async () => {
+    it('rejects approving when the chosen candidate now has an overlapping shift', async () => {
       prisma.shiftOffer.findFirst.mockResolvedValue({
         id: 'offer-1',
-        status: 'accepted',
+        status: 'open',
         requiresManagerApproval: true,
-        acceptedBy: 'user-2',
+        acceptedBy: null,
         shiftAssignmentId: 'assignment-1',
         shiftAssignment: shiftAssignment1,
       });
+      prisma.shiftOfferCandidate.findFirst.mockResolvedValue({ id: 'candidate-1', offerId: 'offer-1', userId: 'user-2' });
       prisma.shiftAssignment.findFirst.mockResolvedValue({
         id: 'assignment-conflict',
         shift: {
@@ -790,37 +854,46 @@ describe('ShiftsService', () => {
         },
       });
 
-      await expect(service.approveOffer('company-a', 'offer-1')).rejects.toThrow(ConflictException);
+      await expect(service.approveOffer('company-a', 'offer-1', { userId: 'user-2' })).rejects.toThrow(
+        ConflictException,
+      );
       expect(prisma.shiftAssignment.update).not.toHaveBeenCalled();
     });
 
-    it('reassigns the shift to the accepted colleague and confirms it', async () => {
+    it('reassigns the shift to the chosen candidate, confirms it, and clears the remaining candidacies', async () => {
       prisma.shiftOffer.findFirst.mockResolvedValue({
         id: 'offer-1',
-        status: 'accepted',
+        status: 'open',
         requiresManagerApproval: true,
-        acceptedBy: 'user-2',
+        acceptedBy: null,
         shiftAssignmentId: 'assignment-1',
         shiftAssignment: shiftAssignment1,
       });
+      prisma.shiftOfferCandidate.findFirst.mockResolvedValue({ id: 'candidate-1', offerId: 'offer-1', userId: 'user-2' });
       prisma.shiftAssignment.findFirst.mockResolvedValue(null);
+      prisma.shiftOfferCandidate.deleteMany.mockResolvedValue({ count: 2 });
       prisma.shiftAssignment.update.mockResolvedValue({ id: 'assignment-1', status: 'confirmed' });
       prisma.shiftOffer.update.mockResolvedValue({ id: 'offer-1', status: 'approved' });
 
-      await service.approveOffer('company-a', 'offer-1');
+      await service.approveOffer('company-a', 'offer-1', { userId: 'user-2' });
 
+      expect(prisma.shiftOfferCandidate.deleteMany).toHaveBeenCalledWith({ where: { offerId: 'offer-1' } });
       expect(prisma.shiftAssignment.update).toHaveBeenCalledWith({
         where: { id: 'assignment-1' },
         data: { userId: 'user-2', status: 'confirmed' },
+      });
+      expect(prisma.shiftOffer.update).toHaveBeenCalledWith({
+        where: { id: 'offer-1' },
+        data: expect.objectContaining({ acceptedBy: 'user-2', status: 'approved' }),
       });
     });
 
     it('blocks approving an offer from another company', async () => {
       prisma.shiftOffer.findFirst.mockResolvedValue(null);
 
-      await expect(service.approveOffer('company-a', 'offer-of-company-b')).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(
+        service.approveOffer('company-a', 'offer-of-company-b', { userId: 'user-2' }),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 
@@ -833,12 +906,12 @@ describe('ShiftsService', () => {
       },
     };
 
-    it('refuses to reject an offer not awaiting manager approval', async () => {
+    it('refuses to reject an offer that is not open', async () => {
       prisma.shiftOffer.findFirst.mockResolvedValue({
         id: 'offer-1',
-        status: 'open',
+        status: 'approved',
         requiresManagerApproval: true,
-        acceptedBy: null,
+        acceptedBy: 'user-2',
         shiftAssignmentId: 'assignment-1',
         shiftAssignment: shiftAssignment1,
       });
@@ -847,20 +920,22 @@ describe('ShiftsService', () => {
       expect(prisma.shiftAssignment.update).not.toHaveBeenCalled();
     });
 
-    it('reverts the assignment to the original owner and marks the offer rejected', async () => {
+    it('reverts the assignment to the original owner, marks the offer rejected, and clears candidacies', async () => {
       prisma.shiftOffer.findFirst.mockResolvedValue({
         id: 'offer-1',
-        status: 'accepted',
+        status: 'open',
         requiresManagerApproval: true,
-        acceptedBy: 'user-2',
+        acceptedBy: null,
         shiftAssignmentId: 'assignment-1',
         shiftAssignment: shiftAssignment1,
       });
+      prisma.shiftOfferCandidate.deleteMany.mockResolvedValue({ count: 1 });
       prisma.shiftAssignment.update.mockResolvedValue({ id: 'assignment-1', status: 'assigned' });
       prisma.shiftOffer.update.mockResolvedValue({ id: 'offer-1', status: 'rejected' });
 
       await service.rejectOffer('company-a', 'offer-1');
 
+      expect(prisma.shiftOfferCandidate.deleteMany).toHaveBeenCalledWith({ where: { offerId: 'offer-1' } });
       expect(prisma.shiftAssignment.update).toHaveBeenCalledWith({
         where: { id: 'assignment-1' },
         data: { status: 'assigned' },

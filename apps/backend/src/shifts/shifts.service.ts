@@ -4,6 +4,7 @@ import { AuthenticatedUser } from '../auth/current-user.decorator';
 import { CreateShiftDto } from './dto/create-shift.dto';
 import { UpdateShiftDto } from './dto/update-shift.dto';
 import { AssignShiftDto } from './dto/assign-shift.dto';
+import { ApproveShiftOfferDto } from './dto/approve-shift-offer.dto';
 import { FindShiftsQueryDto } from './dto/find-shifts-query.dto';
 
 @Injectable()
@@ -87,7 +88,8 @@ export class ShiftsService {
   // l'entreprise, visibles par n'importe quel employé pour qu'il puisse les
   // reprendre — sauf les siennes. Séparé de findAll (qui reste strictement
   // "mes shifts") pour ne pas faire fuiter le planning des collègues dans
-  // l'écran Planning.
+  // l'écran Planning. `hasApplied` évite de re-proposer un bouton "candidater"
+  // actif sur une offre où l'appelant a déjà candidaté.
   async listOpenOffers(companyId: string, requesterId: string) {
     const offers = await this.prisma.shiftOffer.findMany({
       where: {
@@ -95,7 +97,10 @@ export class ShiftsService {
         offeredBy: { not: requesterId },
         shiftAssignment: { shift: { site: { companyId } } },
       },
-      include: { shiftAssignment: { include: { shift: true } } },
+      include: {
+        shiftAssignment: { include: { shift: true } },
+        candidates: { where: { userId: requesterId } },
+      },
       orderBy: { createdAt: 'asc' },
     });
 
@@ -105,6 +110,35 @@ export class ShiftsService {
       shift: offer.shiftAssignment.shift,
       offeredBy: offer.offeredBy,
       createdAt: offer.createdAt,
+      hasApplied: offer.candidates.length > 0,
+    }));
+  }
+
+  // Le pendant côté manager : toutes les offres encore ouvertes de
+  // l'entreprise (page Échanges à valider, web-manager), candidatures
+  // comprises — y compris celles qui n'ont encore trouvé aucun candidat,
+  // pour que le manager sache qu'un shift proposé au marché est resté sans
+  // preneur, pas seulement celles prêtes à valider.
+  async listPendingOffersForManager(companyId: string) {
+    const offers = await this.prisma.shiftOffer.findMany({
+      where: {
+        status: 'open',
+        shiftAssignment: { shift: { site: { companyId } } },
+      },
+      include: {
+        shiftAssignment: { include: { shift: true } },
+        candidates: { orderBy: { createdAt: 'asc' } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return offers.map((offer) => ({
+      id: offer.id,
+      shiftId: offer.shiftAssignment.shiftId,
+      shift: offer.shiftAssignment.shift,
+      offeredBy: offer.offeredBy,
+      createdAt: offer.createdAt,
+      candidates: offer.candidates,
     }));
   }
 
@@ -211,6 +245,12 @@ export class ShiftsService {
     return offer;
   }
 
+  // Un collègue candidate sur une offre encore ouverte — plusieurs
+  // candidatures possibles par offre (voir décision correspondante dans
+  // CLAUDE.md). Ni le statut de l'offre ni celui de l'assignation ne
+  // changent : le shift reste visible dans le planning de son propriétaire
+  // d'origine (toujours 'offered') tant que le manager n'a pas choisi un
+  // candidat via approveOffer.
   async acceptOffer(companyId: string, colleague: AuthenticatedUser, offerId: string) {
     const offer = await this.findOwnedOffer(companyId, offerId);
 
@@ -221,6 +261,15 @@ export class ShiftsService {
       throw new ForbiddenException("Impossible d'accepter sa propre offre");
     }
 
+    const existing = await this.prisma.shiftOfferCandidate.findFirst({
+      where: { offerId, userId: colleague.userId },
+    });
+    if (existing) {
+      throw new BadRequestException('Vous avez déjà candidaté pour cet échange');
+    }
+
+    // Retour rapide pour le candidat — pas une garantie définitive, revérifié
+    // à l'approbation puisque sa disponibilité peut changer d'ici là.
     await this.ensureNoOverlap(
       colleague.userId,
       offer.shiftAssignment.shift.startsAt,
@@ -228,75 +277,65 @@ export class ShiftsService {
       offer.shiftAssignment.shiftId,
     );
 
-    if (!offer.requiresManagerApproval) {
-      const [, updatedOffer] = await this.prisma.$transaction([
-        this.prisma.shiftAssignment.update({
-          where: { id: offer.shiftAssignmentId },
-          data: { userId: colleague.userId, status: 'confirmed' },
-        }),
-        this.prisma.shiftOffer.update({
-          where: { id: offerId },
-          data: { acceptedBy: colleague.userId, status: 'approved', resolvedAt: new Date() },
-        }),
-      ]);
-      return updatedOffer;
-    }
-
-    const [, updatedOffer] = await this.prisma.$transaction([
-      this.prisma.shiftAssignment.update({
-        where: { id: offer.shiftAssignmentId },
-        data: { status: 'swap_pending' },
-      }),
-      this.prisma.shiftOffer.update({
-        where: { id: offerId },
-        data: { acceptedBy: colleague.userId, status: 'accepted' },
-      }),
-    ]);
-
-    return updatedOffer;
+    return this.prisma.shiftOfferCandidate.create({
+      data: { offerId, userId: colleague.userId },
+    });
   }
 
-  async approveOffer(companyId: string, offerId: string) {
+  // Le manager choisit UN candidat parmi ceux qui ont postulé (dto.userId) —
+  // transfère l'assignation, clôt l'offre, et efface les autres candidatures
+  // (elles n'ont plus d'objet une fois l'offre résolue).
+  async approveOffer(companyId: string, offerId: string, dto: ApproveShiftOfferDto) {
     const offer = await this.findOwnedOffer(companyId, offerId);
 
-    if (!offer.requiresManagerApproval || offer.status !== 'accepted' || !offer.acceptedBy) {
-      throw new BadRequestException("Cette offre n'attend pas de validation manager");
+    if (offer.status !== 'open') {
+      throw new BadRequestException("Cette offre n'est plus disponible");
     }
 
-    // Re-vérifié à l'approbation : l'employé a pu être assigné ailleurs entre
-    // son acceptation et la validation manager.
+    const candidate = await this.prisma.shiftOfferCandidate.findFirst({
+      where: { offerId, userId: dto.userId },
+    });
+    if (!candidate) {
+      throw new NotFoundException("Cet employé n'a pas candidaté pour cet échange");
+    }
+
+    // Re-vérifié à l'approbation : le candidat choisi a pu être assigné
+    // ailleurs entre sa candidature et la validation manager.
     await this.ensureNoOverlap(
-      offer.acceptedBy,
+      dto.userId,
       offer.shiftAssignment.shift.startsAt,
       offer.shiftAssignment.shift.endsAt,
       offer.shiftAssignment.shiftId,
     );
 
-    const [, updatedOffer] = await this.prisma.$transaction([
+    const [, , updatedOffer] = await this.prisma.$transaction([
+      this.prisma.shiftOfferCandidate.deleteMany({ where: { offerId } }),
       this.prisma.shiftAssignment.update({
         where: { id: offer.shiftAssignmentId },
-        data: { userId: offer.acceptedBy, status: 'confirmed' },
+        data: { userId: dto.userId, status: 'confirmed' },
       }),
       this.prisma.shiftOffer.update({
         where: { id: offerId },
-        data: { status: 'approved', resolvedAt: new Date() },
+        data: { acceptedBy: dto.userId, status: 'approved', resolvedAt: new Date() },
       }),
     ]);
 
     return updatedOffer;
   }
 
-  // Le manager refuse l'échange : l'offre passe en 'rejected' (état
-  // terminal) et l'assignation revient au propriétaire d'origine — s'il
-  // veut retenter, il doit reproposer explicitement via offerAssignment.
+  // Le manager retire l'offre du marché sans choisir personne — l'offre
+  // passe en 'rejected' (état terminal), les candidatures sont effacées, et
+  // l'assignation revient au propriétaire d'origine. S'il veut retenter, il
+  // doit reproposer explicitement via offerAssignment.
   async rejectOffer(companyId: string, offerId: string) {
     const offer = await this.findOwnedOffer(companyId, offerId);
 
-    if (!offer.requiresManagerApproval || offer.status !== 'accepted' || !offer.acceptedBy) {
-      throw new BadRequestException("Cette offre n'attend pas de validation manager");
+    if (offer.status !== 'open') {
+      throw new BadRequestException("Cette offre n'est plus disponible");
     }
 
-    const [, updatedOffer] = await this.prisma.$transaction([
+    const [, , updatedOffer] = await this.prisma.$transaction([
+      this.prisma.shiftOfferCandidate.deleteMany({ where: { offerId } }),
       this.prisma.shiftAssignment.update({
         where: { id: offer.shiftAssignmentId },
         data: { status: 'assigned' },

@@ -3,11 +3,9 @@ import { View, Text, FlatList, Pressable, StyleSheet, RefreshControl, ActivityIn
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, radius } from '@horaires/ui-tokens';
-import type { Shift, ShiftAssignment, ShiftOffer, Site, User } from '@horaires/shared-types';
+import type { PendingShiftOffer, Site, User } from '@horaires/shared-types';
 import { apiClient, useAuth } from '../services/AuthService';
 import { fonts } from '../theme';
-
-type PendingOffer = { id: string; shift: Shift; assignment: ShiftAssignment; offer: ShiftOffer };
 
 function initials(name: string) {
   return name
@@ -18,37 +16,38 @@ function initials(name: string) {
     .toUpperCase();
 }
 
-// Un collègue a accepté une offre d'échange (status 'accepted') et
-// requiresManagerApproval est vrai — le manager valide ou refuse. Un refus
-// remet l'assignation à son propriétaire d'origine (voir ShiftsService.rejectOffer).
+// Toutes les offres encore ouvertes du marché de shifts — y compris celles
+// sans aucun candidat, pour que le manager voie ce qui reste sans preneur.
+// Plusieurs collègues peuvent candidater sur la même offre : on choisit
+// lequel approuver (chips tapables, un seul sélectionné à la fois). Un refus
+// remet l'assignation à son propriétaire d'origine (ShiftsService.rejectOffer).
 export function ShiftApprovalScreen() {
   const { user } = useAuth();
-  const [pending, setPending] = useState<PendingOffer[]>([]);
+  const [offers, setOffers] = useState<PendingShiftOffer[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [sites, setSites] = useState<Site[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [selectedCandidate, setSelectedCandidate] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
-    const [shifts, userList, siteList] = await Promise.all([
-      apiClient.getShifts(),
+    const [offerList, userList, siteList] = await Promise.all([
+      apiClient.getPendingShiftOffers(),
       apiClient.getUsers(),
       apiClient.getSites(),
     ]);
     setUsers(userList);
     setSites(siteList);
-
-    const rows: PendingOffer[] = [];
-    for (const shift of shifts) {
-      for (const assignment of shift.assignments ?? []) {
-        for (const offer of assignment.offers ?? []) {
-          if (offer.status === 'accepted' && offer.requiresManagerApproval) {
-            rows.push({ id: offer.id, shift, assignment, offer });
-          }
+    setOffers(offerList);
+    setSelectedCandidate((current) => {
+      const next = { ...current };
+      for (const offer of offerList) {
+        if (!next[offer.id] && offer.candidates.length > 0) {
+          next[offer.id] = offer.candidates[0].userId;
         }
       }
-    }
-    setPending(rows);
+      return next;
+    });
   }, []);
 
   useFocusEffect(
@@ -64,9 +63,11 @@ export function ShiftApprovalScreen() {
   };
 
   const approve = async (offerId: string) => {
+    const candidateId = selectedCandidate[offerId];
+    if (!candidateId) return;
     setBusyId(offerId);
     try {
-      await apiClient.approveShiftOffer(offerId);
+      await apiClient.approveShiftOffer(offerId, candidateId);
       await load();
     } finally {
       setBusyId(null);
@@ -94,9 +95,9 @@ export function ShiftApprovalScreen() {
       <View style={styles.headerRow}>
         <View style={styles.titleGroup}>
           <Text style={styles.title}>Validations</Text>
-          {pending.length > 0 ? (
+          {offers.length > 0 ? (
             <View style={styles.countChip}>
-              <Text style={styles.countChipText}>{pending.length} en attente</Text>
+              <Text style={styles.countChipText}>{offers.length} en attente</Text>
             </View>
           ) : null}
         </View>
@@ -106,31 +107,26 @@ export function ShiftApprovalScreen() {
           </Text>
         </View>
       </View>
-      <Text style={styles.subtitle}>Échanges de shifts à approuver</Text>
+      <Text style={styles.subtitle}>Offres du marché de shifts</Text>
 
       <FlatList
-        data={pending}
+        data={offers}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={refresh} />}
-        ListEmptyComponent={<Text style={styles.empty}>Aucun échange en attente de validation.</Text>}
+        ListEmptyComponent={<Text style={styles.empty}>Aucune offre ouverte sur le marché de shifts.</Text>}
         renderItem={({ item }) => {
-          const fromName = userName(item.offer.offeredBy);
-          const toName = userName(item.offer.acceptedBy ?? '');
+          const fromName = userName(item.offeredBy);
           const busy = busyId === item.id;
+          const hasCandidates = item.candidates.length > 0;
           return (
             <View style={styles.card}>
               <View style={styles.swapRow}>
                 <View style={styles.swapAvatar}>
                   <Text style={styles.swapAvatarText}>{initials(fromName)}</Text>
                 </View>
-                <Ionicons name="arrow-forward" size={15} color={colors.textSecondary} />
-                <View style={styles.swapAvatar}>
-                  <Text style={styles.swapAvatarText}>{initials(toName)}</Text>
-                </View>
                 <Text style={styles.swapNames} numberOfLines={1}>
-                  <Text style={styles.swapNamesBold}>{fromName}</Text> cède à{' '}
-                  <Text style={styles.swapNamesBold}>{toName}</Text>
+                  <Text style={styles.swapNamesBold}>{fromName}</Text> propose ce shift
                 </Text>
               </View>
 
@@ -148,12 +144,40 @@ export function ShiftApprovalScreen() {
                 </Text>
               </View>
 
+              {hasCandidates ? (
+                <View style={styles.candidatesBlock}>
+                  <Text style={styles.candidatesLabel}>Candidats</Text>
+                  <View style={styles.candidatesRow}>
+                    {item.candidates.map((candidate) => {
+                      const selected = selectedCandidate[item.id] === candidate.userId;
+                      return (
+                        <Pressable
+                          key={candidate.id}
+                          style={[styles.candidateChip, selected && styles.candidateChipSelected]}
+                          onPress={() => setSelectedCandidate((prev) => ({ ...prev, [item.id]: candidate.userId }))}
+                        >
+                          <Text style={[styles.candidateChipText, selected && styles.candidateChipTextSelected]}>
+                            {userName(candidate.userId)}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              ) : (
+                <Text style={styles.noCandidate}>Aucun candidat pour l'instant</Text>
+              )}
+
               <View style={styles.actionsRow}>
                 <Pressable style={styles.rejectBtn} disabled={busy} onPress={() => reject(item.id)}>
                   <Ionicons name="close" size={16} color={colors.textPrimary} />
-                  <Text style={styles.rejectBtnText}>Refuser</Text>
+                  <Text style={styles.rejectBtnText}>Retirer</Text>
                 </Pressable>
-                <Pressable style={styles.approveBtn} disabled={busy} onPress={() => approve(item.id)}>
+                <Pressable
+                  style={[styles.approveBtn, !hasCandidates && styles.approveBtnDisabled]}
+                  disabled={busy || !hasCandidates}
+                  onPress={() => approve(item.id)}
+                >
                   {busy ? (
                     <ActivityIndicator color={colors.surface} size="small" />
                   ) : (
@@ -231,6 +255,22 @@ const styles = StyleSheet.create({
   detailsSite: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
   detailsDate: { fontSize: 11.5, fontWeight: '700', color: colors.textSecondary, textTransform: 'capitalize' },
 
+  candidatesBlock: { gap: 6 },
+  candidatesLabel: { fontSize: 11.5, fontWeight: '700', color: colors.textSecondary, textTransform: 'uppercase' },
+  candidatesRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  candidateChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: radius.full,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  candidateChipSelected: { borderColor: colors.primary, backgroundColor: colors.primaryTint },
+  candidateChipText: { fontSize: 12.5, fontWeight: '600', color: colors.textSecondary },
+  candidateChipTextSelected: { color: colors.primary },
+  noCandidate: { fontSize: 12.5, color: colors.textSecondary, fontStyle: 'italic' },
+
   actionsRow: { flexDirection: 'row', gap: 10 },
   approveBtn: {
     flex: 1,
@@ -242,6 +282,7 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     paddingVertical: 11,
   },
+  approveBtnDisabled: { backgroundColor: colors.border },
   approveBtnText: { color: colors.surface, fontWeight: '700', fontSize: 13.5 },
   rejectBtn: {
     flex: 1,

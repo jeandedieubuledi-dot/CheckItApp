@@ -279,30 +279,34 @@ async function main() {
     offerCount++;
   }
 
-  // Deux échanges déjà acceptés par un collègue, en attente de validation
-  // manager — le collègue est choisi parmi ceux qui n'ont pas déjà un shift
-  // sur ce créneau, sinon la validation manager échouerait systématiquement
-  // avec un vrai conflit d'horaire (409), ce qui donnait l'impression d'un
-  // bouton "Valider" cassé sur l'écran Approvals.
-  for (const target of pool.splice(0, 2)) {
-    const candidates = employees.filter(
-      (e) => e.id !== target.employeeId && !hasOverlap(e.id, target.startsAt, target.endsAt),
+  // Deux offres avec des candidatures en attente de validation manager —
+  // l'une avec un seul candidat, l'autre avec deux pour illustrer le choix
+  // dans le menu déroulant de la page Approvals. Le shift reste 'offered'
+  // (ni l'offre ni l'assignation ne changent tant que le manager n'a pas
+  // choisi, voir décision correspondante dans CLAUDE.md) ; les candidats
+  // sont choisis parmi les employés qui n'ont pas déjà un shift sur ce
+  // créneau, sinon la validation manager échouerait systématiquement avec
+  // un vrai conflit d'horaire (409).
+  const candidateCountByOffer = [1, 2];
+  for (const [index, target] of pool.splice(0, 2).entries()) {
+    const available = shuffled(
+      employees.filter((e) => e.id !== target.employeeId && !hasOverlap(e.id, target.startsAt, target.endsAt)),
     );
-    const colleague = pick(candidates.length > 0 ? candidates : employees.filter((e) => e.id !== target.employeeId));
-    const slots = assignmentsByEmployee.get(colleague.id) ?? [];
-    slots.push({ startsAt: target.startsAt, endsAt: target.endsAt });
-    assignmentsByEmployee.set(colleague.id, slots);
+    const fallback = employees.filter((e) => e.id !== target.employeeId);
+    const chosenCandidates = (available.length > 0 ? available : fallback).slice(0, candidateCountByOffer[index] ?? 1);
 
-    await prisma.shiftAssignment.update({ where: { id: target.assignmentId }, data: { status: 'swap_pending' } });
-    await prisma.shiftOffer.create({
+    await prisma.shiftAssignment.update({ where: { id: target.assignmentId }, data: { status: 'offered' } });
+    const offer = await prisma.shiftOffer.create({
       data: {
         shiftAssignmentId: target.assignmentId,
         offeredBy: target.employeeId,
-        acceptedBy: colleague.id,
-        status: 'accepted',
+        status: 'open',
         requiresManagerApproval: true,
       },
     });
+    for (const candidate of chosenCandidates) {
+      await prisma.shiftOfferCandidate.create({ data: { offerId: offer.id, userId: candidate.id } });
+    }
     offerCount++;
   }
 

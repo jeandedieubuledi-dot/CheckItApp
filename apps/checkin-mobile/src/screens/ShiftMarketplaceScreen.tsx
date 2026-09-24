@@ -5,10 +5,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, typography } from '@horaires/ui-tokens';
 import type { Shift, ShiftAssignment, Site, User } from '@horaires/shared-types';
 import { apiClient, useAuth } from '../services/AuthService';
+import { ConfirmationBanner } from '../components/ConfirmationBanner';
 import { fonts } from '../theme';
 
 type OwnAssignment = { kind: 'own'; id: string; shift: Shift; assignment: ShiftAssignment };
-type OpenOffer = { kind: 'offer'; id: string; shift: Shift; offeredBy: string };
+type OpenOffer = { kind: 'offer'; id: string; shift: Shift; offeredBy: string; hasApplied: boolean };
 type Row = OwnAssignment | OpenOffer;
 type Segment = 'available' | 'mine';
 
@@ -21,9 +22,12 @@ function initials(name: string) {
     .toUpperCase();
 }
 
-// Marché de shifts : un employé propose un shift qui lui est assigné, un
-// collègue l'accepte (validation manager ensuite si requise). Pas de
-// création d'horaires ici — uniquement le cycle offer/accept.
+// Marché de shifts : un employé propose un shift qui lui est assigné ;
+// plusieurs collègues peuvent candidater sur la même offre ; le manager
+// choisit ensuite lequel approuver (page Échanges à valider, web-manager).
+// Tant que ce choix n'est pas fait, le shift reste dans le planning de son
+// propriétaire d'origine (voir CLAUDE.md) — candidater ici ne le lui retire
+// pas. Pas de création d'horaires ici — uniquement le cycle offer/candidater.
 export function ShiftMarketplaceScreen() {
   const { user } = useAuth();
   const [segment, setSegment] = useState<Segment>('available');
@@ -33,6 +37,7 @@ export function ShiftMarketplaceScreen() {
   const [sites, setSites] = useState<Site[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [banner, setBanner] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
 
   const load = useCallback(async () => {
     const [shifts, offers, userList, siteList] = await Promise.all([
@@ -58,7 +63,9 @@ export function ShiftMarketplaceScreen() {
 
     // "Disponibles" : offres ouvertes des collègues, via l'endpoint dédié
     // (l'API exclut déjà les miennes).
-    setOpenOffers(offers.map((o) => ({ kind: 'offer', id: o.id, shift: o.shift, offeredBy: o.offeredBy })));
+    setOpenOffers(
+      offers.map((o) => ({ kind: 'offer', id: o.id, shift: o.shift, offeredBy: o.offeredBy, hasApplied: o.hasApplied })),
+    );
   }, [user?.id]);
 
   useFocusEffect(
@@ -75,19 +82,29 @@ export function ShiftMarketplaceScreen() {
 
   const offerShift = async (assignmentId: string) => {
     setBusyId(assignmentId);
+    setBanner(null);
     try {
       await apiClient.offerShiftAssignment(assignmentId);
       await load();
+    } catch (err) {
+      setBanner({ kind: 'error', message: err instanceof Error ? err.message : 'Échec de la proposition' });
     } finally {
       setBusyId(null);
     }
   };
 
-  const acceptOffer = async (offerId: string) => {
+  // "Candidater", pas "Accepter" : ça n'attribue rien tout de suite, ça
+  // ajoute juste l'employé à la liste que le manager arbitrera.
+  const applyToOffer = async (offerId: string) => {
     setBusyId(offerId);
+    setBanner(null);
     try {
-      await apiClient.acceptShiftOffer(offerId);
+      await apiClient.applyToShiftOffer(offerId);
       await load();
+    } catch (err) {
+      // 400 si déjà candidat, 409 si un shift chevauche déjà ce créneau —
+      // dans les deux cas, l'utilisateur doit voir pourquoi ça n'a pas marché.
+      setBanner({ kind: 'error', message: err instanceof Error ? err.message : 'Échec de la candidature' });
     } finally {
       setBusyId(null);
     }
@@ -110,6 +127,7 @@ export function ShiftMarketplaceScreen() {
 
   const renderRow = (row: Row) => {
     const busy = busyId === row.id;
+    const alreadyApplied = row.kind === 'offer' && row.hasApplied;
     return (
       <View key={row.id} style={styles.card}>
         <Text style={styles.cardDate}>{dateLabel(row.shift)}</Text>
@@ -129,14 +147,16 @@ export function ShiftMarketplaceScreen() {
         ) : null}
 
         <Pressable
-          style={styles.acceptBtn}
-          disabled={busy}
-          onPress={() => (row.kind === 'own' ? offerShift(row.assignment.id) : acceptOffer(row.id))}
+          style={[styles.acceptBtn, alreadyApplied && styles.acceptBtnDone]}
+          disabled={busy || alreadyApplied}
+          onPress={() => (row.kind === 'own' ? offerShift(row.assignment.id) : applyToOffer(row.id))}
         >
           {busy ? (
             <ActivityIndicator color={colors.surface} size="small" />
           ) : (
-            <Text style={styles.acceptBtnText}>{row.kind === 'own' ? 'Proposer' : 'Accepter'}</Text>
+            <Text style={styles.acceptBtnText}>
+              {row.kind === 'own' ? 'Proposer' : alreadyApplied ? 'Candidature envoyée' : 'Candidater'}
+            </Text>
           )}
         </Pressable>
       </View>
@@ -155,6 +175,8 @@ export function ShiftMarketplaceScreen() {
           </View>
         </View>
         <Text style={styles.subtitle}>Proposés par vos collègues</Text>
+
+        {banner ? <ConfirmationBanner kind={banner.kind} message={banner.message} /> : null}
 
         <View style={styles.segmented}>
           <Pressable style={[styles.seg, segment === 'available' && styles.segActive]} onPress={() => setSegment('available')}>
@@ -254,6 +276,7 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     alignItems: 'center',
   },
+  acceptBtnDone: { backgroundColor: colors.border },
   acceptBtnText: { color: colors.surface, fontWeight: '700', fontSize: 13.5 },
 
   navSpacer: { height: 90 },

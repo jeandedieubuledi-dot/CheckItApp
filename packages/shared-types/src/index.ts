@@ -91,14 +91,34 @@ export interface ShiftOffer {
   requiresManagerApproval: boolean;
 }
 
+// Un collègue candidat sur une offre encore ouverte — plusieurs candidatures
+// possibles par offre, le manager choisit laquelle approuver.
+export interface ShiftOfferCandidate {
+  id: string;
+  offerId: string;
+  userId: string;
+  createdAt: string;
+}
+
 // ---- GET /shift-offers : Marché de shifts (offres ouvertes de toute
 // l'entreprise, sauf celles de l'appelant) ----
 export interface OpenShiftOffer {
-  id: string; // id de l'offre — à passer à acceptShiftOffer
+  id: string; // id de l'offre — à passer à applyToShiftOffer
   shiftId: string;
   shift: Shift;
   offeredBy: string; // id de l'employé qui a proposé le shift
   createdAt: string;
+  hasApplied: boolean; // l'appelant a déjà candidaté sur cette offre
+}
+
+// ---- GET /shift-offers/pending : page "Échanges à valider" (web-manager) ----
+export interface PendingShiftOffer {
+  id: string;
+  shiftId: string;
+  shift: Shift;
+  offeredBy: string;
+  createdAt: string;
+  candidates: ShiftOfferCandidate[];
 }
 
 export interface Availability {

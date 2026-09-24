@@ -384,6 +384,50 @@ Cible : PME de 20-100 employés par site.
     ne jamais réintroduire une comparaison sur les `Date` UTC brutes du
     shift dans l'une des deux sans l'autre, elles doivent rester cohérentes.
 
+22. **Le marché de shifts accepte plusieurs candidats par offre — le manager
+    choisit lequel approuver, le shift ne quitte le planning de son
+    propriétaire d'origine qu'à ce moment-là.** Avant cette décision, une
+    seule personne pouvait "accepter" une offre (`ShiftOffer.acceptedBy`,
+    champ unique) : la première à cliquer verrouillait l'offre pour tout le
+    monde. Nouveau modèle :
+    - `ShiftOfferCandidate` (nouvelle table, `@@unique([offerId, userId])`)
+      enregistre chaque candidature — plusieurs lignes possibles pour la
+      même offre. `ShiftsService.acceptOffer` (endpoint
+      `POST /shift-offers/:id/accept`, toujours ce nom pour l'API, mais
+      c'est désormais une candidature, pas une finalisation) se contente d'y
+      ajouter une ligne : **ni `ShiftOffer.status` ni
+      `ShiftAssignment.status` ne changent tant qu'aucun choix n'est fait**
+      — le shift reste `offered`, visible et attribué à son propriétaire
+      d'origine dans son planning (`GET /shifts`, web-manager comme
+      checkin-mobile) exactement comme avant qu'il ne le propose. Les
+      statuts `swap_pending` (assignation) et `accepted` (offre) de l'ancien
+      flux à candidat unique restent dans les enums Prisma/TS pour ne pas
+      casser une migration à froid, mais **le nouveau code ne les produit
+      plus jamais** — ne pas s'étonner qu'ils soient orphelins.
+    - `ShiftsService.approveOffer(companyId, offerId, { userId })` prend
+      maintenant l'id du candidat choisi (nouveau `ApproveShiftOfferDto`) :
+      transfère l'assignation à CE candidat précis, revérifie son absence de
+      chevauchement (l'état a pu changer depuis sa candidature), clôt
+      l'offre, et **supprime les autres candidatures** (`deleteMany`,
+      devenues sans objet). `rejectOffer` fait de même sans choisir
+      personne : l'assignation revient au propriétaire d'origine, toutes
+      les candidatures sont effacées.
+    - `GET /shift-offers/pending` (nouveau, `listPendingOffersForManager`,
+      admin/manager) alimente la page "Échanges à valider"
+      (web-manager `ShiftApprovalPage`, checkin-mobile
+      `ShiftApprovalScreen`) : **toutes** les offres encore ouvertes de
+      l'entreprise, candidatures comprises — y compris celles à zéro
+      candidat, pour que le manager voie ce qui traîne sans preneur sur le
+      marché, pas seulement ce qui est prêt à valider. Le manager choisit
+      parmi les candidats (menu déroulant web, chips tapables mobile) avant
+      de valider ; sans candidat, seul "Retirer" (rejectOffer) est possible.
+    - `GET /shift-offers` (marché employé, `listOpenOffers`) renvoie en
+      plus `hasApplied` (l'appelant a-t-il déjà candidaté sur cette offre)
+      pour que le bouton "Candidater" du marché (checkin-mobile
+      `ShiftMarketplaceScreen`, renommé — "Accepter" n'était plus honnête,
+      candidater ne finalise plus rien) se désactive après une candidature
+      plutôt que de proposer un second clic sans effet visible.
+
 ## Stack
 
 - Backend : NestJS + PostgreSQL + Prisma + Passport/JWT

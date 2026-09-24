@@ -6,11 +6,13 @@ import type {
   DeviceTimeEntryResult,
   GeocodeCandidate,
   OpenShiftOffer,
+  PendingShiftOffer,
   PresentEmployee,
   RotatingQrCode,
   Shift,
   ShiftAssignment,
   ShiftOffer,
+  ShiftOfferCandidate,
   Site,
   TimeEntry,
   User,
@@ -303,12 +305,20 @@ export class ApiClient {
     return this.request<ShiftOffer>('POST', `/shift-assignments/${assignmentId}/offer`);
   }
 
-  acceptShiftOffer(offerId: string) {
-    return this.request<ShiftAssignment>('POST', `/shift-offers/${offerId}/accept`);
+  // Candidater sur une offre ouverte — plusieurs collègues peuvent le faire
+  // pour la même offre, le manager choisit ensuite lequel approuver.
+  applyToShiftOffer(offerId: string) {
+    return this.request<ShiftOfferCandidate>('POST', `/shift-offers/${offerId}/accept`);
   }
 
-  approveShiftOffer(offerId: string) {
-    return this.request<ShiftAssignment>('POST', `/shift-offers/${offerId}/approve`);
+  // Page "Échanges à valider" (managers/admins) : offres ouvertes de
+  // l'entreprise, candidatures comprises (même vides).
+  getPendingShiftOffers() {
+    return this.request<PendingShiftOffer[]>('GET', '/shift-offers/pending');
+  }
+
+  approveShiftOffer(offerId: string, userId: string) {
+    return this.request<ShiftAssignment>('POST', `/shift-offers/${offerId}/approve`, { userId });
   }
 
   rejectShiftOffer(offerId: string) {
