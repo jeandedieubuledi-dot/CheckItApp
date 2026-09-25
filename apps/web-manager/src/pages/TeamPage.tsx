@@ -1,13 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import { UserPlus, RefreshCw, KeyRound } from 'lucide-react';
 import { colors, spacing, radius, typography, shadows } from '@horaires/ui-tokens';
-import type { Site, User, UserRole } from '@horaires/shared-types';
+import type { Site, User, UserRole, UserStatus } from '@horaires/shared-types';
 import { apiClient } from '../services/AuthService';
 
 const ROLE_LABELS: Record<UserRole, string> = {
   admin: 'Admin',
   manager: 'Manager',
   employee: 'Employé',
+};
+
+const STATUS_LABELS: Record<UserStatus, string> = {
+  active: 'Actif',
+  invited: 'Invité',
+  disabled: 'Désactivé',
 };
 
 export function TeamPage() {
@@ -70,6 +76,18 @@ export function TeamPage() {
     setBusyUserId(userId);
     try {
       await apiClient.updateUserRole(userId, newRole);
+      await load();
+    } finally {
+      setBusyUserId(null);
+    }
+  };
+
+  // Pas encore de flow "accepter l'invitation" (voir CLAUDE.md) — en
+  // attendant, un manager peut activer/désactiver un compte directement ici.
+  const changeStatus = async (userId: string, newStatus: UserStatus) => {
+    setBusyUserId(userId);
+    try {
+      await apiClient.updateUserStatus(userId, newStatus);
       await load();
     } finally {
       setBusyUserId(null);
@@ -231,7 +249,18 @@ export function TeamPage() {
                     <span style={styles.muted}>Tous les sites</span>
                   )}
                 </td>
-                <td style={styles.td}>{u.status}</td>
+                <td style={styles.td}>
+                  <select
+                    style={styles.inlineSelect}
+                    value={u.status}
+                    disabled={busyUserId === u.id}
+                    onChange={(e) => changeStatus(u.id, e.target.value as UserStatus)}
+                  >
+                    <option value="invited">{STATUS_LABELS.invited}</option>
+                    <option value="active">{STATUS_LABELS.active}</option>
+                    <option value="disabled">{STATUS_LABELS.disabled}</option>
+                  </select>
+                </td>
                 <td style={styles.td}>
                   <button
                     className="btn"

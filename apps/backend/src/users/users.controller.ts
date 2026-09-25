@@ -9,6 +9,7 @@ import { UsersService } from './users.service';
 import { RotatingQrService } from './rotating-qr.service';
 import { InviteUserDto } from './dto/invite-user.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
+import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { SetPinDto } from './dto/set-pin.dto';
 import { UpdateUserSettingsDto } from './dto/update-user-settings.dto';
 
@@ -59,6 +60,17 @@ export class UsersController {
     @Body() dto: UpdateUserRoleDto,
   ) {
     return this.usersService.updateRole(user.companyId, id, dto);
+  }
+
+  @Patch(':id/status')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'manager')
+  updateStatus(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateUserStatusDto,
+  ) {
+    return this.usersService.updateStatus(user.companyId, id, dto);
   }
 
   @Post(':id/badge/regenerate')

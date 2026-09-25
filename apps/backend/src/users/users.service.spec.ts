@@ -96,6 +96,28 @@ describe('UsersService', () => {
     expect(prisma.user.update).not.toHaveBeenCalled();
   });
 
+  it('blocks updateStatus() on a user from another company before touching prisma.update', async () => {
+    prisma.user.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.updateStatus('company-a', 'user-of-company-b', { status: 'active' as any }),
+    ).rejects.toThrow(NotFoundException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('lets updateStatus() move an invited user to active', async () => {
+    prisma.user.findFirst.mockResolvedValue({ id: 'user-1', companyId: 'company-a' });
+    prisma.user.update.mockResolvedValue({ id: 'user-1', status: 'active' });
+
+    await service.updateStatus('company-a', 'user-1', { status: 'active' as any });
+
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'user-1' },
+      data: { status: 'active' },
+      select: expect.any(Object),
+    });
+  });
+
   it('blocks updateSettings() on a user from another company before touching prisma.update', async () => {
     prisma.user.findFirst.mockResolvedValue(null);
 

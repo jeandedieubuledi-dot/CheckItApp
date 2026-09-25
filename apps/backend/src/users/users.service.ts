@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { InviteUserDto } from './dto/invite-user.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
+import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { SetPinDto } from './dto/set-pin.dto';
 import { UpdateUserSettingsDto } from './dto/update-user-settings.dto';
 
@@ -106,6 +107,18 @@ export class UsersService {
     return this.prisma.user.update({
       where: { id },
       data: { role: dto.role },
+      select: SAFE_USER_SELECT,
+    });
+  }
+
+  // Pas encore de flow "accepter l'invitation" (voir CLAUDE.md, "Connu
+  // manquant") — en attendant, un manager peut faire passer un compte
+  // `invited` à `active` (ou `disabled` pour un départ) directement.
+  async updateStatus(companyId: string, id: string, dto: UpdateUserStatusDto) {
+    await this.findOne(companyId, id);
+    return this.prisma.user.update({
+      where: { id },
+      data: { status: dto.status },
       select: SAFE_USER_SELECT,
     });
   }

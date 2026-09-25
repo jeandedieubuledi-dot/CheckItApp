@@ -222,6 +222,13 @@ export class ApiClient {
     return this.request<User>('PATCH', `/users/${userId}/role`, { role });
   }
 
+  // Pas encore de flow "accepter l'invitation" — en attendant, un manager
+  // peut faire passer un compte `invited` à `active` (ou `disabled`)
+  // directement depuis la page Équipe.
+  updateUserStatus(userId: string, status: string) {
+    return this.request<User>('PATCH', `/users/${userId}/status`, { status });
+  }
+
   regenerateBadge(userId: string) {
     return this.request<User>('POST', `/users/${userId}/badge/regenerate`);
   }
