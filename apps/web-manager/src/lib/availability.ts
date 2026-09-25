@@ -22,31 +22,54 @@ export function resolveAvailability(availabilities: Availability[], userId: stri
   return availabilities.find((a) => a.userId === userId && !a.specificDate && a.dayOfWeek === dayOfWeek);
 }
 
-// Détail d'une indisponibilité déclarée, pour l'affichage dans la grille :
-// - 'none'  : disponible, ou rien de déclaré (voir plus bas pourquoi ce
-//             second cas n'est PAS traité comme une indisponibilité ici).
-// - 'full'  : toute la journée (sentinelle FULL_DAY_START/END).
-// - 'from'  : indisponible à partir de `time` jusqu'à la fin de journée.
-// - 'until' : indisponible depuis le début de journée jusqu'à `time`.
+// Détail d'une indisponibilité/restriction déclarée, pour l'affichage dans
+// la grille :
+// - 'none'   : disponible toute la journée, ou rien de déclaré (voir plus
+//              bas pourquoi ce second cas n'est PAS traité comme une
+//              indisponibilité ici).
+// - 'full'   : indisponible toute la journée (sentinelle FULL_DAY_START/END).
+// - 'from'   : indisponible à partir de `time` jusqu'à la fin de journée.
+// - 'until'  : indisponible depuis le début de journée jusqu'à `time`.
+// - 'window' : disponible seulement entre `start` et `end` (le reste de la
+//              journée est bloqué des deux côtés) — voir plus bas.
 export type UnavailabilityInfo =
   | { kind: 'none' }
   | { kind: 'full' }
   | { kind: 'from'; time: string }
-  | { kind: 'until'; time: string };
+  | { kind: 'until'; time: string }
+  | { kind: 'window'; start: string; end: string };
 
 // Un employé n'est marqué indisponible dans la grille que s'il l'a déclaré
-// explicitement (isAvailable: false). L'absence totale de déclaration bloque
-// aussi l'assignation côté backend (voir ShiftsService.ensureAvailable), mais
-// ne veut pas dire la même chose — "pas encore renseigné" plutôt que
-// "refusé" — et l'afficher pareil noierait la grille de marquages sur des
-// cases sans réelle information (beaucoup de créneaux ne sont jamais
-// déclarés) : ce cas retombe donc sur 'none', comme s'il était disponible.
+// explicitement (isAvailable: false), OU si sa disponibilité déclarée
+// (isAvailable: true) ne couvre pas toute la journée. L'absence totale de
+// déclaration bloque aussi l'assignation côté backend (voir
+// ShiftsService.ensureAvailable), mais ne veut pas dire la même chose —
+// "pas encore renseigné" plutôt que "refusé" — et l'afficher pareil
+// noierait la grille de marquages sur des cases sans réelle information
+// (beaucoup de créneaux ne sont jamais déclarés) : ce cas retombe donc sur
+// 'none', comme s'il était disponible.
 export function getUnavailabilityInfo(availabilities: Availability[], userId: string, date: Date): UnavailabilityInfo {
   const resolved = resolveAvailability(availabilities, userId, date);
-  if (!resolved || resolved.isAvailable) return { kind: 'none' };
+  if (!resolved) return { kind: 'none' };
 
   const { startTime, endTime } = resolved;
-  if (startTime === FULL_DAY_START && endTime === FULL_DAY_END) return { kind: 'full' };
+  const isFullDay = startTime === FULL_DAY_START && endTime === FULL_DAY_END;
+
+  if (resolved.isAvailable) {
+    if (isFullDay) return { kind: 'none' };
+    // Fenêtre restreinte : plus atteignable depuis l'écran Disponibilités
+    // actuel (qui n'envoie que la sentinelle "toute la journée", voir
+    // décision #8), mais une ligne existante avec des heures précises (jeu
+    // de démo, import) reste un vrai créneau d'assignation possible SEULEMENT
+    // entre startTime et endTime — ShiftsService.assign le fait déjà
+    // respecter côté backend (isEmployeeAvailableForShift en miroir côté
+    // sélecteur/glisser-déposer), la grille doit le montrer plutôt que
+    // laisser une case a l'air libre qui refuse silencieusement toute
+    // dépose en dehors de ces heures.
+    return { kind: 'window', start: startTime, end: endTime };
+  }
+
+  if (isFullDay) return { kind: 'full' };
   if (startTime === FULL_DAY_START) return { kind: 'until', time: endTime };
   // endTime === FULL_DAY_END dans le cas normal (produit par l'écran
   // Disponibilités) ; un ancien enregistrement avec les deux bords

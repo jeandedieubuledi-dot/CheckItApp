@@ -480,6 +480,36 @@ Cible : PME de 20-100 employés par site.
       (30s web, aucun avant côté mobile) **en filet de sécurité** — le
       websocket accélère juste le rafraîchissement, il ne le remplace pas.
 
+24. **Une disponibilité `isAvailable: true` à heures restreintes (ex.
+    09:00-16:00, plus atteignable depuis l'écran Disponibilités actuel, voir
+    décision #8, mais toujours présente dans le jeu de démo/import) doit
+    être visible dans la grille planning, pas juste appliquée en silence.**
+    Bug trouvé en prod (Sophie Van Damme, mardi — sa dispo Tuesday était
+    "09:00-16:00" mais sa cellule paraissait totalement libre) :
+    `getUnavailabilityInfo` (décision #14) ne traitait que les déclarations
+    `isAvailable: false`, donc une fenêtre restreinte `isAvailable: true`
+    retombait sur `'none'` (case visuellement libre) alors que
+    `isEmployeeAvailableForShift`/`ShiftsService.assign` refusaient bel et
+    bien tout shift débordant de cette fenêtre — dépose silencieuse sans le
+    moindre indice ni message.
+    - Nouveau type `UnavailabilityInfo` : `'window'` (`{start, end}`), rendu
+      par `getUnavailabilityInfo` quand `isAvailable: true` et que la plage
+      n'est pas la sentinelle "toute la journée". `PlanningGridCell` affiche
+      un dégradé bloqué **des deux côtés** (avant `start`, après `end`, libre
+      entre les deux — contrairement à `'from'`/`'until'`, qui n'ont qu'un
+      bord, voir décision #8) + étiquette « Disponible HH:mm-HH:mm ».
+    - `PlanningGridCell` ne passe plus `disabled` à `useDroppable` : une
+      cellule refusée doit quand même devenir `over` pour dnd-kit, sinon le
+      dépôt échoue en silence sans que `PlanningPage.handleDragEnd` sache
+      quoi que ce soit du refus. La validation (même titulaire déjà présent,
+      même vérification d'horaire que `isEmployeeAvailableForShift`) est
+      recentralisée dans `handleDragEnd`, qui affiche désormais un message
+      explicite (`setConflictMessage`, même `Dialog` que les erreurs 409
+      backend) au lieu de ne rien faire. `disabled` reste calculé dans
+      `PlanningGridCell` pour la seule teinte de survol pendant le
+      glisser-déposer (rose pâle = refus, au lieu d'aucune teinte avant ce
+      correctif).
+
 ## Stack
 
 - Backend : NestJS + PostgreSQL + Prisma + Passport/JWT
