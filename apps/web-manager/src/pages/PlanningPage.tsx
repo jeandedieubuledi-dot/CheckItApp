@@ -33,7 +33,7 @@ import {
   WEEKDAY_LABELS_FR,
 } from '../lib/date';
 import { getShiftPalette } from '../lib/shiftColor';
-import { getUnavailabilityInfo, isEmployeeAvailableForShift } from '../lib/availability';
+import { getUnavailabilityInfo } from '../lib/availability';
 import { loadShiftTemplates, saveShiftTemplates, type ShiftTemplate } from '../lib/shiftTemplates';
 
 type ViewMode = 'week' | 'month';
@@ -345,30 +345,6 @@ export function PlanningPage() {
     const activeData = active.data.current as DragPayload;
     const overData = over.data.current as DropPayload;
     if (overData.type !== 'cell') return;
-
-    // Même vérification que PlanningGridCell utilisait pour désactiver la
-    // cellule (voir `disabled` là-bas) — recentralisée ici pour pouvoir
-    // expliquer le refus au lieu de laisser le geste sans effet ni message.
-    if (overData.employeeId) {
-      if (blockedAssigneeId !== null && blockedAssigneeId !== overData.employeeId) {
-        setConflictMessage(
-          'Ce shift a déjà un titulaire différent — retirez-le de son planning avant de le réassigner.',
-        );
-        return;
-      }
-      if (draggedTimeRange) {
-        const startsAt = combineDateAndTime(new Date(overData.date), draggedTimeRange.startTime);
-        const minutes = durationMinutesFromTimeRange(draggedTimeRange.startTime, draggedTimeRange.endTime);
-        const endsAt = new Date(startsAt.getTime() + minutes * 60000);
-        if (!isEmployeeAvailableForShift(availabilities, overData.employeeId, startsAt, endsAt)) {
-          const employee = employees.find((e) => e.id === overData.employeeId);
-          setConflictMessage(
-            `${employee ? `${employee.firstName} ${employee.lastName}` : 'Cet employé'} n'est pas disponible sur ce créneau.`,
-          );
-          return;
-        }
-      }
-    }
 
     if (activeData.type === 'shift') {
       void moveShift(activeData.shiftId, activeData.startsAt, activeData.endsAt, overData.date, overData.employeeId);

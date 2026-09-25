@@ -82,28 +82,16 @@ export function PlanningGridCell({
     (blockedAssigneeId !== null && blockedAssigneeId !== employeeId) || draggedOverlapsUnavailability,
   );
 
-  // Volontairement PAS de `disabled` ici : une cellule refusée doit quand
-  // même pouvoir devenir `over`, sinon dnd-kit l'exclut de la détection de
-  // collision et le dépôt échoue en silence, sans le moindre message (voir
-  // PlanningPage.handleDragEnd, qui refait la même vérification pour
-  // expliquer le refus plutôt que de ne rien faire).
   const { setNodeRef, isOver } = useDroppable({
     id: `cell-${employeeId ?? 'pool'}-${date.toISOString()}`,
     data: { type: 'cell', date: date.toISOString(), employeeId },
+    disabled,
   });
 
   const showHoverTint = isOver && !disabled;
-  const showRejectTint = isOver && disabled;
-  const backgroundColor = showRejectTint
-    ? UNAVAILABLE_BG
-    : showHoverTint
-    ? colors.primaryTint
-    : unavailabilityInfo.kind === 'full'
-    ? UNAVAILABLE_BG
-    : mint
-    ? colors.accentTint
-    : colors.surface;
-  const backgroundImage = showHoverTint || showRejectTint ? undefined : partialGradient(unavailabilityInfo);
+  const backgroundColor =
+    showHoverTint ? colors.primaryTint : unavailabilityInfo.kind === 'full' ? UNAVAILABLE_BG : mint ? colors.accentTint : colors.surface;
+  const backgroundImage = showHoverTint ? undefined : partialGradient(unavailabilityInfo);
 
   return (
     <div
@@ -149,8 +137,6 @@ function unavailabilityLabel(info: UnavailabilityInfo): string {
       return `Indisponible dès ${info.time}`;
     case 'until':
       return `Indisponible jusqu'à ${info.time}`;
-    case 'window':
-      return `Disponible ${info.start}-${info.end}`;
     default:
       return '';
   }
@@ -168,14 +154,6 @@ function partialGradient(info: UnavailabilityInfo): string | undefined {
   if (info.kind === 'until') {
     const pct = fractionOfDay(info.time) * 100;
     return `linear-gradient(to right, ${UNAVAILABLE_BG} 0%, ${UNAVAILABLE_BG} ${pct}%, transparent ${pct}%, transparent 100%)`;
-  }
-  if (info.kind === 'window') {
-    // Bloqué des deux côtés de la fenêtre déclarée (contrairement à
-    // 'from'/'until', qui n'ont qu'un seul bord personnalisable, voir
-    // décision #8) — libre seulement entre start et end.
-    const startPct = fractionOfDay(info.start) * 100;
-    const endPct = fractionOfDay(info.end) * 100;
-    return `linear-gradient(to right, ${UNAVAILABLE_BG} 0%, ${UNAVAILABLE_BG} ${startPct}%, transparent ${startPct}%, transparent ${endPct}%, ${UNAVAILABLE_BG} ${endPct}%, ${UNAVAILABLE_BG} 100%)`;
   }
   return undefined;
 }
