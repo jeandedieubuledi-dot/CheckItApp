@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantScopeGuard } from '../auth/tenant-scope.guard';
@@ -21,9 +21,12 @@ export class UsersController {
     private readonly rotatingQrService: RotatingQrService,
   ) {}
 
+  // `siteId` optionnel : filtre l'annuaire pour la grille planning d'un site
+  // donné (voir UsersService.findAll) — omis, renvoie toute l'entreprise
+  // comme avant (pas de changement de comportement par défaut).
   @Get()
-  findAll(@CurrentUser() user: AuthenticatedUser) {
-    return this.usersService.findAll(user.companyId);
+  findAll(@CurrentUser() user: AuthenticatedUser, @Query('siteId') siteId?: string) {
+    return this.usersService.findAll(user.companyId, siteId);
   }
 
   // Code QR rotatif personnel (TOTP, 30s) affiché par checkin-mobile —

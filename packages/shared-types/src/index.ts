@@ -49,6 +49,10 @@ export interface User {
   // null = suit le réglage entreprise par défaut (Company.gpsClockInEnabled),
   // true/false = surcharge individuelle explicite.
   gpsClockInEnabled?: boolean | null;
+  // Site de rattachement, optionnel — null = pas encore assigné, reste
+  // visible sur tous les sites de la grille planning (voir CLAUDE.md
+  // décision #25).
+  siteId?: string | null;
   // pas de pinCodeHash exposé côté client par défaut
 }
 

@@ -89,6 +89,7 @@ model Site {
   devices     SiteDevice[]
   shifts      Shift[]
   timeEntries TimeEntry[]
+  employees   User[]
 
   @@map("sites")
 }
@@ -105,6 +106,14 @@ model User {
   status       UserStatus @default(invited)
   pinCodeHash  String?    @map("pin_code_hash")
   badgeCode    String?    @unique @map("badge_code")
+  // Site "de rattachement" de l'employé — optionnel : null = pas encore
+  // assigné, reste visible sur TOUS les sites du planning (voir
+  // UsersService.findAll) plutôt que de disparaître partout. onDelete:
+  // SetNull pour que supprimer un site libère ses employés au lieu de
+  // bloquer la suppression (contrairement à Shift/TimeEntry/SiteDevice, qui
+  // sont les vraies données opérationnelles du site).
+  siteId       String?    @map("site_id")
+  site         Site?      @relation(fields: [siteId], references: [id], onDelete: SetNull)
   // Secret TOTP (RFC 6238) propre à cet utilisateur — sert à générer le QR
   // rotatif affiché sur son téléphone. Généré une seule fois, à la première
   // activation du pointage QR (voir RotatingQrService.generateCode). Jamais

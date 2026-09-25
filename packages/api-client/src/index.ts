@@ -207,11 +207,14 @@ export class ApiClient {
   }
 
   // ---- Utilisateurs (annuaire de l'entreprise — noms des collègues) ----
-  getUsers() {
-    return this.request<User[]>('GET', '/users');
+  // `siteId` optionnel : ne renvoie que les employés de ce site (plus ceux
+  // sans site assigné, plus les managers/admins) — voir CLAUDE.md décision
+  // #25. Omis, renvoie toute l'entreprise comme avant.
+  getUsers(siteId?: string) {
+    return this.request<User[]>('GET', `/users${toQueryString({ siteId })}`);
   }
 
-  inviteUser(payload: { email: string; firstName: string; lastName: string; role?: string }) {
+  inviteUser(payload: { email: string; firstName: string; lastName: string; role?: string; siteId?: string }) {
     return this.request<User>('POST', '/users/invite', payload);
   }
 
@@ -227,9 +230,11 @@ export class ApiClient {
     return this.request<{ ok: true }>('POST', `/users/${userId}/pin`, { pin });
   }
 
-  // Surcharge individuelle du réglage GPS — `gpsClockInEnabled: null` remet
-  // l'employé sur le réglage entreprise par défaut.
-  updateUserSettings(userId: string, payload: { gpsClockInEnabled: boolean | null }) {
+  // Surcharge individuelle du réglage GPS et/ou site de rattachement —
+  // `gpsClockInEnabled: null` remet l'employé sur le réglage entreprise par
+  // défaut, `siteId: null` le désassigne de tout site (redevient visible
+  // partout, voir décision #25). Un champ omis reste inchangé côté backend.
+  updateUserSettings(userId: string, payload: { gpsClockInEnabled?: boolean | null; siteId?: string | null }) {
     return this.request<User>('PATCH', `/users/${userId}/settings`, payload);
   }
 

@@ -361,7 +361,12 @@ export function PlanningPage() {
     setWeekScope('week');
   };
 
-  const employees = users.filter((u) => u.role === 'employee');
+  // Un employé sans site assigné (siteId: null) reste visible sur TOUS les
+  // sites plutôt que de disparaître partout tant qu'il n'a pas été rattaché
+  // via la page Équipe — voir CLAUDE.md décision #25.
+  const employees = users.filter(
+    (u) => u.role === 'employee' && (u.siteId == null || u.siteId === selectedSiteId),
+  );
   const allDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   const days = weekScope === 'day' ? [selectedDay] : allDays;
 

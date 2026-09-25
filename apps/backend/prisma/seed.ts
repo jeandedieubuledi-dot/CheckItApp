@@ -138,6 +138,13 @@ async function main() {
     const pin = String(1001 + i);
     const pinCodeHash = await bcrypt.hash(pin, SALT_ROUNDS);
     const badgeCode = `BADGE-DEMO-${String(i + 1).padStart(3, '0')}`;
+    // Répartis entre les deux sites en alternance, sauf un sur trois laissé
+    // non-assigné (siteId: null) — pour que la démo montre à la fois le cas
+    // normal ET le cas "pas encore rattaché" (visible sur tous les sites,
+    // voir UsersService.findAll et décision #25) sans configuration
+    // manuelle. `update: {}` sur l'upsert : un employé déjà en base garde
+    // le site qui lui a été assigné manuellement, jamais réécrasé au reseed.
+    const siteId = i % 3 === 2 ? undefined : sites[i % 2].id;
     const user = await prisma.user.upsert({
       where: { email: def.email },
       update: {},
@@ -151,6 +158,7 @@ async function main() {
         status: 'active',
         pinCodeHash,
         badgeCode,
+        siteId,
       },
     });
     employees.push({ id: user.id, firstName: def.firstName, lastName: def.lastName, email: def.email, pin });
@@ -171,6 +179,14 @@ async function main() {
     select: { id: true },
   });
   const oldAssignmentIds = oldAssignments.map((a) => a.id);
+  const oldOffers = await prisma.shiftOffer.findMany({
+    where: { shiftAssignmentId: { in: oldAssignmentIds } },
+    select: { id: true },
+  });
+  // Doit précéder la suppression des ShiftOffer eux-mêmes (contrainte FK) —
+  // manquant avant l'ajout du modèle multi-candidats (décision #22), ce qui
+  // faisait planter tout reseed d'une base ayant déjà des candidatures.
+  await prisma.shiftOfferCandidate.deleteMany({ where: { offerId: { in: oldOffers.map((o) => o.id) } } });
   await prisma.shiftOffer.deleteMany({ where: { shiftAssignmentId: { in: oldAssignmentIds } } });
   await prisma.shiftAssignment.deleteMany({ where: { shiftId: { in: oldShiftIds } } });
   await prisma.shift.deleteMany({ where: { id: { in: oldShiftIds } } });

@@ -14,6 +14,9 @@ describe('UsersService', () => {
       create: jest.Mock;
       update: jest.Mock;
     };
+    site: {
+      findFirst: jest.Mock;
+    };
   };
 
   beforeEach(async () => {
@@ -24,6 +27,9 @@ describe('UsersService', () => {
         findUnique: jest.fn(),
         create: jest.fn(),
         update: jest.fn(),
+      },
+      site: {
+        findFirst: jest.fn(),
       },
     };
 
@@ -43,6 +49,18 @@ describe('UsersService', () => {
     expect(call.where).toEqual({ companyId: 'company-a' });
     expect(call.select.passwordHash).toBeUndefined();
     expect(call.select.pinCodeHash).toBeUndefined();
+  });
+
+  it('filters findAll() to a site (plus unassigned employees and any manager/admin) when siteId is given', async () => {
+    prisma.user.findMany.mockResolvedValue([]);
+
+    await service.findAll('company-a', 'site-1');
+
+    const call = prisma.user.findMany.mock.calls[0][0];
+    expect(call.where).toEqual({
+      companyId: 'company-a',
+      OR: [{ siteId: 'site-1' }, { siteId: null }, { role: { not: 'employee' } }],
+    });
   });
 
   it('never returns a user belonging to another company', async () => {
@@ -82,7 +100,48 @@ describe('UsersService', () => {
 
     expect(prisma.user.update).toHaveBeenCalledWith({
       where: { id: 'user-1' },
-      data: { gpsClockInEnabled: null },
+      data: { gpsClockInEnabled: null, siteId: undefined },
+      select: expect.any(Object),
+    });
+  });
+
+  it('rejects updateSettings() assigning a site from another company, before touching prisma.update', async () => {
+    prisma.user.findFirst.mockResolvedValueOnce({ id: 'user-1', companyId: 'company-a' }); // findOne
+    prisma.site.findFirst.mockResolvedValue(null); // ensureSiteInCompany
+
+    await expect(
+      service.updateSettings('company-a', 'user-1', { siteId: 'site-of-company-b' }),
+    ).rejects.toThrow(NotFoundException);
+    expect(prisma.site.findFirst).toHaveBeenCalledWith({
+      where: { id: 'site-of-company-b', companyId: 'company-a' },
+    });
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('lets updateSettings() assign an employee to a site of their own company', async () => {
+    prisma.user.findFirst.mockResolvedValueOnce({ id: 'user-1', companyId: 'company-a' }); // findOne
+    prisma.site.findFirst.mockResolvedValue({ id: 'site-1', companyId: 'company-a' });
+    prisma.user.update.mockResolvedValue({ id: 'user-1', siteId: 'site-1' });
+
+    await service.updateSettings('company-a', 'user-1', { siteId: 'site-1' });
+
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'user-1' },
+      data: { gpsClockInEnabled: undefined, siteId: 'site-1' },
+      select: expect.any(Object),
+    });
+  });
+
+  it('lets updateSettings() clear the site (siteId: null) without validating a site', async () => {
+    prisma.user.findFirst.mockResolvedValueOnce({ id: 'user-1', companyId: 'company-a' }); // findOne
+    prisma.user.update.mockResolvedValue({ id: 'user-1', siteId: null });
+
+    await service.updateSettings('company-a', 'user-1', { siteId: null });
+
+    expect(prisma.site.findFirst).not.toHaveBeenCalled();
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'user-1' },
+      data: { gpsClockInEnabled: undefined, siteId: null },
       select: expect.any(Object),
     });
   });
@@ -113,6 +172,37 @@ describe('UsersService', () => {
     const call = prisma.user.create.mock.calls[0][0];
     expect(call.data.companyId).toBe('company-a');
     expect(call.data.status).toBe('invited');
+  });
+
+  it('rejects invite() with a site from another company, before touching prisma.create', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.site.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.invite('company-a', {
+        email: 'new@example.com',
+        firstName: 'A',
+        lastName: 'B',
+        siteId: 'site-of-company-b',
+      }),
+    ).rejects.toThrow(NotFoundException);
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it('creates an invited user already attached to a site of the caller company', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.site.findFirst.mockResolvedValue({ id: 'site-1', companyId: 'company-a' });
+    prisma.user.create.mockResolvedValue({ id: 'new-user' });
+
+    await service.invite('company-a', {
+      email: 'new@example.com',
+      firstName: 'A',
+      lastName: 'B',
+      siteId: 'site-1',
+    });
+
+    const call = prisma.user.create.mock.calls[0][0];
+    expect(call.data.siteId).toBe('site-1');
   });
 
   describe('resolveByPin', () => {

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { UserPlus, RefreshCw, KeyRound } from 'lucide-react';
 import { colors, spacing, radius, typography, shadows } from '@horaires/ui-tokens';
-import type { User, UserRole } from '@horaires/shared-types';
+import type { Site, User, UserRole } from '@horaires/shared-types';
 import { apiClient } from '../services/AuthService';
 
 const ROLE_LABELS: Record<UserRole, string> = {
@@ -12,6 +12,7 @@ const ROLE_LABELS: Record<UserRole, string> = {
 
 export function TeamPage() {
   const [users, setUsers] = useState<User[]>([]);
+  const [sites, setSites] = useState<Site[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -19,6 +20,7 @@ export function TeamPage() {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [role, setRole] = useState<UserRole>('employee');
+  const [inviteSiteId, setInviteSiteId] = useState('');
   const [isInviting, setIsInviting] = useState(false);
 
   const [pinDrafts, setPinDrafts] = useState<Record<string, string>>({});
@@ -27,8 +29,9 @@ export function TeamPage() {
   const load = async () => {
     setIsLoading(true);
     try {
-      const list = await apiClient.getUsers();
+      const [list, siteList] = await Promise.all([apiClient.getUsers(), apiClient.getSites()]);
       setUsers(list);
+      setSites(siteList);
     } finally {
       setIsLoading(false);
     }
@@ -43,11 +46,18 @@ export function TeamPage() {
     setError(null);
     setIsInviting(true);
     try {
-      await apiClient.inviteUser({ email: email.trim(), firstName, lastName, role });
+      await apiClient.inviteUser({
+        email: email.trim(),
+        firstName,
+        lastName,
+        role,
+        siteId: inviteSiteId || undefined,
+      });
       setEmail('');
       setFirstName('');
       setLastName('');
       setRole('employee');
+      setInviteSiteId('');
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Échec de l'invitation");
@@ -101,6 +111,18 @@ export function TeamPage() {
     }
   };
 
+  // Site de rattachement — valeur vide = aucun site (siteId: null), reste
+  // visible sur tous les sites de la grille planning (décision #25).
+  const changeSite = async (userId: string, value: string) => {
+    setBusyUserId(userId);
+    try {
+      await apiClient.updateUserSettings(userId, { siteId: value || null });
+      await load();
+    } finally {
+      setBusyUserId(null);
+    }
+  };
+
   return (
     <div>
       <h1 style={styles.title}>Équipe</h1>
@@ -131,6 +153,14 @@ export function TeamPage() {
             <option value="employee">Employé</option>
             <option value="manager">Manager</option>
           </select>
+          <select style={styles.input} value={inviteSiteId} onChange={(e) => setInviteSiteId(e.target.value)}>
+            <option value="">Aucun site</option>
+            {sites.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
           <button
             className="btn btn-gradient"
             style={styles.button}
@@ -154,6 +184,7 @@ export function TeamPage() {
               <th style={styles.th}>Nom</th>
               <th style={styles.th}>Email</th>
               <th style={styles.th}>Rôle</th>
+              <th style={styles.th}>Site</th>
               <th style={styles.th}>Statut</th>
               <th style={styles.th}>Badge</th>
               <th style={styles.th}>PIN</th>
@@ -178,6 +209,27 @@ export function TeamPage() {
                     <option value="manager">{ROLE_LABELS.manager}</option>
                     <option value="admin">{ROLE_LABELS.admin}</option>
                   </select>
+                </td>
+                <td style={styles.td}>
+                  {/* Managers/admins supervisent tous les sites — pas de
+                      rattachement possible, voir décision #25. */}
+                  {u.role === 'employee' ? (
+                    <select
+                      style={styles.inlineSelect}
+                      value={u.siteId ?? ''}
+                      disabled={busyUserId === u.id}
+                      onChange={(e) => changeSite(u.id, e.target.value)}
+                    >
+                      <option value="">Aucun (tous les sites)</option>
+                      {sites.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span style={styles.muted}>Tous les sites</span>
+                  )}
                 </td>
                 <td style={styles.td}>{u.status}</td>
                 <td style={styles.td}>

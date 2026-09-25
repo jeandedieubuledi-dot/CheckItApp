@@ -519,6 +519,59 @@ Cible : PME de 20-100 employés par site.
       direct) pourrait encore l'exercer légitimement — mais aucune donnée
       vivante générée par l'app ou le seed ne doit plus jamais en produire.
 
+25. **`User.siteId` (nullable) rattache un employé à UN site — scoping
+    affichage seulement, pas d'application backend stricte pour l'instant.**
+    Avant cette décision, `User` n'avait aucun lien vers `Site` : `GET
+    /users` renvoyait tout l'annuaire de l'entreprise sans distinction, donc
+    le même employé apparaissait sur la grille planning de TOUS les sites,
+    assignable n'importe où — signalé par l'utilisateur ("comment se fait-il
+    que tous les employés soient liés aux deux sites").
+    - **Nullable, jamais obligatoire** : `siteId: null` = pas encore
+      rattaché, reste visible sur TOUS les sites (même philosophie que
+      l'absence de déclaration de disponibilité, décision #14 — ne pas
+      confondre "pas assigné" avec "exclu partout"). Pas de backfill sur les
+      employés existants : ils restent `null` jusqu'à assignation manuelle
+      via la page Équipe.
+    - **`onDelete: SetNull`** sur `User.site` : supprimer un site libère ses
+      employés plutôt que de bloquer la suppression (contrairement à
+      `Shift`/`TimeEntry`/`SiteDevice`, qui sont les données opérationnelles
+      réelles du site et n'ont pas cette clause).
+    - **Scoping affichage seulement, choix produit explicite** :
+      `UsersService.findAll(companyId, siteId?)` filtre l'annuaire quand
+      `GET /users?siteId=` est fourni (`OR: [{siteId}, {siteId: null},
+      {role: {not: 'employee'}}]` — un employé sans site OU un manager/admin
+      passe toujours le filtre, les managers supervisant tous les sites de
+      l'entreprise sans notion de rattachement). `ShiftsService.assign()`
+      **n'a pas changé** : un manager reste techniquement libre d'assigner
+      un employé à un shift d'un site qui n'est pas le sien — pas de 409 sur
+      un mismatch site/employé. web-manager `PlanningPage` filtre
+      `employees` côté client avec la même règle (pas de nouvel appel réseau
+      au changement de site sélectionné, la liste complète est déjà chargée).
+      Si un vrai cloisonnement métier devient nécessaire (ex. présence,
+      assignation), ce sera une décision produit séparée et explicite — ne
+      pas l'ajouter par extension silencieuse de cette décision-ci.
+    - **`UsersService.ensureSiteInCompany`** revalide systématiquement
+      qu'un `siteId` fourni par le client (invite, `PATCH
+      /users/:id/settings`) appartient bien à `companyId` avant de l'écrire
+      — règle critique décision #1, jamais faire confiance à un id de site
+      fourni tel quel.
+    - Page Équipe (web-manager `TeamPage`) : nouveau sélecteur "Site" par
+      ligne employé (même pattern que la surcharge GPS existante — valeur
+      vide = aucun site), + sélecteur de site dans le formulaire d'invitation.
+      Les rôles manager/admin n'ont pas de sélecteur (juste "Tous les
+      sites") puisque le filtre ne les exclut jamais de toute façon.
+    - Seed : les 8 employés de démo sont répartis en alternance entre les 2
+      sites, un sur trois laissé `null`, pour que la démo illustre les deux
+      cas (rattaché / pas encore rattaché) sans configuration manuelle.
+      `upsert(... update: {})` : un reseed ne réécrase jamais le site d'un
+      employé déjà en base.
+    - *Bug latent corrigé au passage* : le nettoyage du seed
+      (`shiftOffer.deleteMany`) ne supprimait pas d'abord les
+      `ShiftOfferCandidate` qui référencent l'offre (modèle ajouté par la
+      décision #22, après l'écriture de cette section du seed) — un reseed
+      sur une base ayant déjà des candidatures plantait sur une violation de
+      contrainte FK. `shiftOfferCandidate.deleteMany` ajouté juste avant.
+
 ## Stack
 
 - Backend : NestJS + PostgreSQL + Prisma + Passport/JWT

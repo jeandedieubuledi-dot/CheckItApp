@@ -1,5 +1,5 @@
 import { UserRole } from '@prisma/client';
-import { IsEmail, IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsEmail, IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
 
 export class InviteUserDto {
   @IsEmail()
@@ -14,4 +14,9 @@ export class InviteUserDto {
   @IsOptional()
   @IsEnum(UserRole)
   role?: UserRole;
+
+  // Site de rattachement, optionnel — voir CLAUDE.md décision #25.
+  @IsOptional()
+  @IsUUID()
+  siteId?: string;
 }

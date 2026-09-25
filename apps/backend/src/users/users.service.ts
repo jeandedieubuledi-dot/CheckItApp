@@ -20,6 +20,7 @@ const SAFE_USER_SELECT = {
   status: true,
   badgeCode: true,
   gpsClockInEnabled: true,
+  siteId: true,
   createdAt: true,
 } as const;
 
@@ -27,8 +28,22 @@ const SAFE_USER_SELECT = {
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  findAll(companyId: string) {
-    return this.prisma.user.findMany({ where: { companyId }, select: SAFE_USER_SELECT });
+  // `siteId` optionnel : filtre l'annuaire pour un site donné, utilisé par la
+  // grille planning (web-manager) pour ne proposer que les employés qui y
+  // sont rattachés. Un employé sans site (siteId: null) reste visible sur
+  // TOUS les sites — pas de déclaration = pas exclu, même philosophie que
+  // les disponibilités (décision #14) — et les rôles manager/admin ne sont
+  // jamais filtrés (ils supervisent tous les sites de l'entreprise, voir
+  // décision #25 : le scoping ne s'applique qu'à l'affichage, pas encore à
+  // l'assignation backend).
+  findAll(companyId: string, siteId?: string) {
+    return this.prisma.user.findMany({
+      where: {
+        companyId,
+        ...(siteId ? { OR: [{ siteId }, { siteId: null }, { role: { not: 'employee' } }] } : {}),
+      },
+      select: SAFE_USER_SELECT,
+    });
   }
 
   async findOne(companyId: string, id: string) {
@@ -47,6 +62,9 @@ export class UsersService {
     if (existing) {
       throw new ConflictException('Un compte existe déjà avec cet email');
     }
+    if (dto.siteId) {
+      await this.ensureSiteInCompany(companyId, dto.siteId);
+    }
 
     // Pas encore de flow "accepter l'invitation" : on génère un mot de passe
     // temporaire aléatoire, jamais communiqué, en attendant que ce flow existe.
@@ -62,9 +80,21 @@ export class UsersService {
         role: dto.role ?? 'employee',
         status: 'invited',
         passwordHash,
+        siteId: dto.siteId,
       },
       select: SAFE_USER_SELECT,
     });
+  }
+
+  // Jamais faire confiance à un siteId fourni par le client sans vérifier
+  // qu'il appartient bien à la même entreprise (règle critique décision #1) —
+  // sinon un manager pourrait rattacher un employé au site d'une AUTRE
+  // company en devinant/rejouant un id.
+  private async ensureSiteInCompany(companyId: string, siteId: string) {
+    const site = await this.prisma.site.findFirst({ where: { id: siteId, companyId } });
+    if (!site) {
+      throw new NotFoundException('Site introuvable');
+    }
   }
 
   async updateRole(companyId: string, id: string, dto: UpdateUserRoleDto) {
@@ -86,13 +116,18 @@ export class UsersService {
     });
   }
 
-  // Surcharge individuelle du réglage GPS de l'entreprise. `null` explicite
-  // remet l'employé sur le réglage entreprise (voir TimeEntriesService).
+  // Surcharge individuelle du réglage GPS de l'entreprise, et/ou site de
+  // rattachement. `null` explicite sur l'un ou l'autre champ le remet à
+  // vide (réglage entreprise par défaut / aucun site) ; un champ absent du
+  // DTO (undefined) reste inchangé — Prisma ignore les clés `undefined`.
   async updateSettings(companyId: string, id: string, dto: UpdateUserSettingsDto) {
     await this.findOne(companyId, id);
+    if (dto.siteId) {
+      await this.ensureSiteInCompany(companyId, dto.siteId);
+    }
     return this.prisma.user.update({
       where: { id },
-      data: { gpsClockInEnabled: dto.gpsClockInEnabled },
+      data: { gpsClockInEnabled: dto.gpsClockInEnabled, siteId: dto.siteId },
       select: SAFE_USER_SELECT,
     });
   }
