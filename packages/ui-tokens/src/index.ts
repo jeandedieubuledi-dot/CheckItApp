@@ -27,12 +27,19 @@ export const colors = {
 // Palette pastel pour les cartes de shift de la grille planning (web-manager).
 // Une couleur est choisie par shift (hash déterministe sur son id, voir
 // `getShiftPalette` dans web-manager) — sert uniquement à distinguer
-// visuellement des shifts voisins, pas à encoder un statut ou un rôle.
+// visuellement des shifts voisins, pas à encoder un statut ou un rôle. 8
+// teintes (élargi depuis 4) pour qu'une même cellule/jour avec plusieurs
+// cartes ait moins de collisions de couleur — même famille de ton (fond
+// très pâle + texte saturé mais sourd), aucune nouvelle teinte criarde.
 export const shiftPalette = [
   { bg: '#FFF3E6', text: '#B45309' }, // orange
   { bg: '#EAF2FF', text: '#2563EB' }, // bleu
   { bg: '#FDF0F6', text: '#BE185D' }, // rose
   { bg: '#F3EEFF', text: '#7C3AED' }, // violet
+  { bg: '#EAFBF0', text: '#15803D' }, // vert
+  { bg: '#FFFBE6', text: '#A16207' }, // ambre
+  { bg: '#E6FBFF', text: '#0E7490' }, // cyan
+  { bg: '#EEF2FF', text: '#4338CA' }, // indigo
 ];
 
 // Format CSS (web uniquement) — dégradé de marque, utilisé avec parcimonie

@@ -2,10 +2,12 @@ import { Test } from '@nestjs/testing';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { UsersService } from './users.service';
 
 describe('UsersService', () => {
   let service: UsersService;
+  let realtime: { emitToCompany: jest.Mock };
   let prisma: {
     user: {
       findMany: jest.Mock;
@@ -16,6 +18,9 @@ describe('UsersService', () => {
     };
     site: {
       findFirst: jest.Mock;
+    };
+    shiftAssignment: {
+      updateMany: jest.Mock;
     };
   };
 
@@ -31,10 +36,18 @@ describe('UsersService', () => {
       site: {
         findFirst: jest.fn(),
       },
+      shiftAssignment: {
+        updateMany: jest.fn(),
+      },
     };
+    realtime = { emitToCompany: jest.fn() };
 
     const module = await Test.createTestingModule({
-      providers: [UsersService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        UsersService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: RealtimeGateway, useValue: realtime },
+      ],
     }).compile();
 
     service = module.get(UsersService);
@@ -119,7 +132,7 @@ describe('UsersService', () => {
   });
 
   it('lets updateSettings() assign an employee to a site of their own company', async () => {
-    prisma.user.findFirst.mockResolvedValueOnce({ id: 'user-1', companyId: 'company-a' }); // findOne
+    prisma.user.findFirst.mockResolvedValueOnce({ id: 'user-1', companyId: 'company-a', siteId: null }); // findOne
     prisma.site.findFirst.mockResolvedValue({ id: 'site-1', companyId: 'company-a' });
     prisma.user.update.mockResolvedValue({ id: 'user-1', siteId: 'site-1' });
 
@@ -133,7 +146,7 @@ describe('UsersService', () => {
   });
 
   it('lets updateSettings() clear the site (siteId: null) without validating a site', async () => {
-    prisma.user.findFirst.mockResolvedValueOnce({ id: 'user-1', companyId: 'company-a' }); // findOne
+    prisma.user.findFirst.mockResolvedValueOnce({ id: 'user-1', companyId: 'company-a', siteId: 'site-1' }); // findOne
     prisma.user.update.mockResolvedValue({ id: 'user-1', siteId: null });
 
     await service.updateSettings('company-a', 'user-1', { siteId: null });
@@ -144,6 +157,45 @@ describe('UsersService', () => {
       data: { gpsClockInEnabled: undefined, siteId: null },
       select: expect.any(Object),
     });
+  });
+
+  it('cancels future active shift assignments when updateSettings() actually changes the site', async () => {
+    prisma.user.findFirst.mockResolvedValueOnce({ id: 'user-1', companyId: 'company-a', siteId: 'site-1' }); // findOne
+    prisma.site.findFirst.mockResolvedValue({ id: 'site-2', companyId: 'company-a' });
+    prisma.user.update.mockResolvedValue({ id: 'user-1', siteId: 'site-2' });
+
+    await service.updateSettings('company-a', 'user-1', { siteId: 'site-2' });
+
+    expect(prisma.shiftAssignment.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'user-1',
+        status: { not: 'cancelled' },
+        shift: { startsAt: { gt: expect.any(Date) } },
+      },
+      data: { status: 'cancelled' },
+    });
+    expect(realtime.emitToCompany).toHaveBeenCalledWith('company-a', 'shifts:changed');
+  });
+
+  it('does not touch shift assignments when updateSettings() keeps the same site', async () => {
+    prisma.user.findFirst.mockResolvedValueOnce({ id: 'user-1', companyId: 'company-a', siteId: 'site-1' }); // findOne
+    prisma.site.findFirst.mockResolvedValue({ id: 'site-1', companyId: 'company-a' });
+    prisma.user.update.mockResolvedValue({ id: 'user-1', siteId: 'site-1' });
+
+    await service.updateSettings('company-a', 'user-1', { siteId: 'site-1' });
+
+    expect(prisma.shiftAssignment.updateMany).not.toHaveBeenCalled();
+    expect(realtime.emitToCompany).not.toHaveBeenCalled();
+  });
+
+  it('does not touch shift assignments when updateSettings() only changes an unrelated field', async () => {
+    prisma.user.findFirst.mockResolvedValueOnce({ id: 'user-1', companyId: 'company-a', siteId: 'site-1' }); // findOne
+    prisma.user.update.mockResolvedValue({ id: 'user-1', gpsClockInEnabled: true });
+
+    await service.updateSettings('company-a', 'user-1', { gpsClockInEnabled: true });
+
+    expect(prisma.shiftAssignment.updateMany).not.toHaveBeenCalled();
+    expect(realtime.emitToCompany).not.toHaveBeenCalled();
   });
 
   it('rejects invite() when the email is already used, even across companies', async () => {

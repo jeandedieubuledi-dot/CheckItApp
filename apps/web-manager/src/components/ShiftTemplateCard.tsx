@@ -2,10 +2,9 @@ import React, { useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { X } from 'lucide-react';
-import { colors, spacing, radius, typography, shadows } from '@horaires/ui-tokens';
+import { colors, spacing, radius, typography, shadows, shiftPalette } from '@horaires/ui-tokens';
 import { DRAG_CURSOR, DRAG_CURSOR_ACTIVE } from '../lib/cursors';
 import { durationMinutesFromTimeRange, formatDurationLabel } from '../lib/date';
-import { getShiftPalette } from '../lib/shiftColor';
 import type { ShiftTemplate } from '../lib/shiftTemplates';
 
 type Props = { template: ShiftTemplate; onDelete: (id: string) => void };
@@ -14,7 +13,11 @@ type Props = { template: ShiftTemplate; onDelete: (id: string) => void };
 // cellule de la grille (PlanningPage) pour y créer un vrai shift daté.
 export function ShiftTemplateCard({ template, onDelete }: Props) {
   const [isPressed, setIsPressed] = useState(false);
-  const palette = getShiftPalette(template.id);
+  // Couleur attribuée une fois à la création du modèle (voir
+  // nextAvailablePaletteIndex) — jamais dérivée d'un hash de l'id, pour
+  // garantir l'absence de collision avec un autre modèle existant tant qu'il
+  // reste une teinte libre.
+  const palette = shiftPalette[template.paletteIndex % shiftPalette.length];
   const minutes = durationMinutesFromTimeRange(template.startTime, template.endTime);
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
@@ -81,6 +84,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: radius.md,
     padding: `${spacing.sm}px ${spacing.sm}px`,
     width: 132,
+    flexShrink: 0,
   },
   dragHandle: { touchAction: 'none', paddingRight: spacing.lg, display: 'flex', flexDirection: 'column' },
   time: { fontSize: typography.sizes.sm, fontWeight: 700, display: 'block', lineHeight: 1.3 },

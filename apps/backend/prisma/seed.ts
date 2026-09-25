@@ -21,6 +21,9 @@ const PASSWORD = 'password123';
 const SITE_DEFS = [
   { name: 'Site Bruxelles Centre', address: 'Rue de la Loi 1, 1000 Bruxelles' },
   { name: 'Site Ixelles', address: 'Chaussée d’Ixelles 200, 1050 Ixelles' },
+  // Adresse volontairement non précisée (pas de vrai numéro de rue connu) —
+  // juste la commune, pour ne pas fabriquer une fausse adresse géocodable.
+  { name: 'The Barn Etterbeek', address: 'Etterbeek, Bruxelles' },
 ];
 
 const EMPLOYEE_DEFS = [
@@ -33,6 +36,28 @@ const EMPLOYEE_DEFS = [
   { email: 'amelie.dubois@test.local', firstName: 'Amélie', lastName: 'Dubois' },
   { email: 'lucas.petit@test.local', firstName: 'Lucas', lastName: 'Petit' },
 ];
+
+// Prénoms relevés depuis le planning existant de The Barn Etterbeek (capture
+// fournie par l'utilisateur) — pas de nom de famille ni d'email réel connus
+// pour l'instant, donc lastName vide et email synthétique généré ci-dessous
+// (comptes inertes : aucun email n'est réellement envoyé, pas de flow
+// d'acceptation d'invitation actuellement, voir "Connu manquant").
+const BARN_EMPLOYEE_FIRST_NAMES = [
+  'Jephan', 'Manon', 'Arthur', 'Charlotte', 'Harold', 'Aurélie', 'Marie D',
+  'Harry', 'Pierre', 'Adrian', 'Louis', 'Baptiste', 'Eva', 'Victoria',
+  'Barbara', 'Judith', 'Madeline', 'Dustin', 'Jolien', 'Etty', 'Martin',
+  'Eve', 'Capucine', 'Maud', 'Emilie',
+];
+
+// "Marie D" -> "marie.d" (accents retirés, espaces -> points) pour un email
+// synthétique lisible et stable — pas de collision entre ces 25 prénoms.
+function slugifyForEmail(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, '.');
+}
 
 const SHIFT_TEMPLATES = [
   { startH: 8, startM: 0, endH: 16, endM: 0 },
@@ -162,6 +187,33 @@ async function main() {
       },
     });
     employees.push({ id: user.id, firstName: def.firstName, lastName: def.lastName, email: def.email, pin });
+  }
+
+  // ---------- The Barn Etterbeek : employés réels du site, sans planning
+  // généré ----------
+  // Volontairement PAS ajoutés au tableau `employees` ci-dessus : ce
+  // tableau alimente le générateur de shifts/dispos/pointages plus bas, qui
+  // répartit son planning fictif sur TOUS les sites de `sites` sans
+  // distinction (voir décision #25) — les inclure aurait fait apparaître
+  // ces vrais prénoms sur le planning inventé des sites de démo. Ici, on ne
+  // crée que les comptes + leur rattachement au site, rien d'autre.
+  const barnSite = sites.find((s) => s.name === 'The Barn Etterbeek')!;
+  for (const firstName of BARN_EMPLOYEE_FIRST_NAMES) {
+    const email = `${slugifyForEmail(firstName)}@thebarnetterbeek.local`;
+    await prisma.user.upsert({
+      where: { email },
+      update: {},
+      create: {
+        companyId: company.id,
+        email,
+        passwordHash,
+        firstName,
+        lastName: '',
+        role: 'employee',
+        status: 'active',
+        siteId: barnSite.id,
+      },
+    });
   }
 
   // ---------- Nettoyage des données transactionnelles ----------
@@ -398,6 +450,14 @@ async function main() {
   console.log('  Autres employés (même mot de passe) :');
   for (const e of employees.slice(1)) {
     console.log(`    ${e.email} — PIN ${e.pin}`);
+  }
+  console.log('');
+  console.log(
+    `  The Barn Etterbeek : ${BARN_EMPLOYEE_FIRST_NAMES.length} employés (même mot de passe, sans PIN/badge, ` +
+      'aucun planning généré) :',
+  );
+  for (const firstName of BARN_EMPLOYEE_FIRST_NAMES) {
+    console.log(`    ${slugifyForEmail(firstName)}@thebarnetterbeek.local`);
   }
 }
 

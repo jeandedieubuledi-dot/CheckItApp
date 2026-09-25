@@ -18,6 +18,9 @@ type Props = {
   dayShifts: Shift[];
   employees: User[];
   availabilities: Availability[];
+  // Résolu par PlanningPage (lib/shiftColor.ts, resolveShiftColors) — un
+  // shift garde toujours la même couleur, jamais recalculée ici.
+  getShiftPalette: (shiftId: string) => { bg: string; text: string };
   onDeleteShift: (id: string) => void;
   onDuplicateShift: (shift: Shift) => void;
   onAssign: (shiftId: string, userId: string) => void;
@@ -51,6 +54,7 @@ export function PlanningGridCell({
   dayShifts,
   employees,
   availabilities,
+  getShiftPalette,
   onDeleteShift,
   onDuplicateShift,
   onAssign,
@@ -112,6 +116,7 @@ export function PlanningGridCell({
         <ShiftCard
           key={shift.id}
           shift={shift}
+          palette={getShiftPalette(shift.id)}
           employees={employees}
           availabilities={availabilities}
           dayShifts={dayShifts}

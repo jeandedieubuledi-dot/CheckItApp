@@ -75,7 +75,8 @@ export function isEmployeeAvailableForShift(
 ): boolean {
   const dayStart = new Date(startsAt.getFullYear(), startsAt.getMonth(), startsAt.getDate());
   const resolved = resolveAvailability(availabilities, userId, dayStart);
-  if (!resolved) return false;
+  // Aucune déclaration == disponible par défaut, voir ShiftsService.ensureAvailable.
+  if (!resolved) return true;
 
   if (resolved.isAvailable) {
     const availStart = timeOnDate(dayStart, resolved.startTime);

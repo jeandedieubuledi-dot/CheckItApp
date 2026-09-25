@@ -6,11 +6,15 @@ import { colors, spacing, radius, typography, shadows } from '@horaires/ui-token
 import type { Availability, Shift, User } from '@horaires/shared-types';
 import { DRAG_CURSOR, DRAG_CURSOR_ACTIVE } from '../lib/cursors';
 import { durationMinutes, formatDurationLabel } from '../lib/date';
-import { getShiftPalette } from '../lib/shiftColor';
 import { isEmployeeAvailableForShift } from '../lib/availability';
 
 type Props = {
   shift: Shift;
+  // Couleur résolue par PlanningPage (voir lib/shiftColor.ts,
+  // resolveShiftColors) — mémorisée par shift id, pas recalculée ici, pour
+  // qu'un shift garde toujours la même couleur au lieu d'un hash qui pouvait
+  // coïncider avec un autre shift du même jour.
+  palette: { bg: string; text: string };
   employees: User[];
   availabilities: Availability[];
   // Tous les shifts de ce jour, n'importe quel employé, assignés ou non —
@@ -36,6 +40,7 @@ type Props = {
 // Bordure en tirets + étiquette "Brouillon" tant qu'il n'est pas publié.
 export function ShiftCard({
   shift,
+  palette,
   employees,
   availabilities,
   dayShifts,
@@ -49,7 +54,6 @@ export function ShiftCard({
   const hasAssignment = (shift.assignments ?? []).length > 0;
   const isDraft = shift.status === 'draft';
   const [isPressed, setIsPressed] = useState(false);
-  const palette = getShiftPalette(shift.id);
 
   // Employés déjà occupés ce jour-là (n'importe quel autre shift, assigné
   // n'importe quand dans la journée — pas seulement un chevauchement

@@ -82,8 +82,9 @@ Cible : PME de 20-100 employés par site.
 8. **`ShiftsService.assign()` vérifie la disponibilité déclarée avant
    d'assigner.** Une entrée `Availability` sur une date précise (`specificDate`)
    prime sur une entrée récurrente (`dayOfWeek`) pour ce même jour ; absence
-   totale de disponibilité déclarée → rejet en 409 (pas de déclaration =
-   bloqué par défaut). Si une entrée existe :
+   totale de disponibilité déclarée → **disponible par défaut** (règle
+   révisée — voir en fin de décision, l'ancien comportement était
+   l'inverse). Si une entrée existe :
    - `isAvailable: true` → le shift doit rentrer entièrement dans
      `startTime`/`endTime` (comportement backend inchangé). Côté écran
      Disponibilités (checkin-mobile), un employé ne peut plus saisir
@@ -112,6 +113,32 @@ Cible : PME de 20-100 employés par site.
      une ligne `isAvailable: true` comme une plage d'indisponibilité (deux
      sens opposés du même champ selon `isAvailable` — voulu, pas une
      incohérence à "corriger").
+   - **Révision du défaut "absence de déclaration"** (2026-09-25) : c'était
+     à l'origine `bloqué par défaut` (rejet en 409 si aucune ligne
+     `Availability` n'existe pour ce jour, ni `specificDate` ni `dayOfWeek`).
+     Renversé en `disponible par défaut` (le `if (!availability)` de
+     `ensureAvailable` fait maintenant `return` au lieu de `throw`) suite à
+     plusieurs incidents en prod (Sophie/Nabil/Eric puis Lucas Petit/dustin
+     Mupenda) : la grille planning affiche déjà l'absence de déclaration
+     comme `'none'`, une case visuellement libre (décision #14) — avec
+     l'ancien défaut, cette case refusait pourtant silencieusement toute
+     dépose, sans le moindre indice pour le manager. Un vrai onboarding
+     (employé qui ouvre son écran Disponibilités, qui affiche déjà chaque
+     jour comme un toggle Disponible/Indisponible) ne reste jamais longtemps
+     dans cet état "rien de déclaré" ; le seul cas où ça persiste est un
+     compte jamais activé (ex. `status: invited` sans flow d'acceptation
+     d'invitation, voir "Connu manquant") ou un jeu de démo incomplet — dans
+     les deux cas, bloquer silencieusement n'aidait pas plus qu'être
+     assignable par défaut. Ce qui bloque désormais, c'est l'indisponibilité
+     *déclarée* (`isAvailable: false`), jamais son absence. Miroir côté
+     frontend : `isEmployeeAvailableForShift` (web-manager,
+     `lib/availability.ts`) et l'état vide d'`AvailabilitiesScreen`
+     (checkin-mobile — un jour jamais déclaré s'affiche maintenant
+     "Disponible", pas "Indisponible") ont été alignés sur ce même défaut ;
+     l'ancienne logique de `toggleDay` qui "bootstrappait" une disponibilité
+     récurrente au premier passage à Disponible sur un jour jamais déclaré
+     (pour éviter qu'il reste bloqué indéfiniment) a été supprimée — devenue
+     inutile puisque ce jour est déjà disponible par défaut.
 
 9. **GPS clock-in désactivable, à deux niveaux** : `Company.gpsClockInEnabled`
    (réglage par défaut de l'entreprise) et `User.gpsClockInEnabled` nullable
@@ -153,9 +180,9 @@ Cible : PME de 20-100 employés par site.
       jour concerné.
     - Une carte de shift (`ShiftCard`) = horaire en gras + durée en dessous
       (`formatDurationLabel`), fond pastel très léger et texte assorti,
-      couleur choisie par hash déterministe de l'id du shift parmi 4
-      (orange/bleu/rose/violet — `shiftPalette` dans `ui-tokens`,
-      `getShiftPalette` côté web-manager). Séparations de grille fines,
+      couleur parmi 8 teintes (`shiftPalette` dans `ui-tokens`) — voir
+      décision #26 pour comment cette couleur est attribuée et pourquoi
+      elle n'est plus un simple hash de l'id. Séparations de grille fines,
       gris clair (`colors.border`).
     - Glisser-déposer : toute la carte est la poignée ; on la lâche sur une
       cellule (employé x jour) pour assigner (uniquement si le shift n'a
@@ -185,14 +212,17 @@ Cible : PME de 20-100 employés par site.
 14. **Indisponibilités affichées dans la grille = seulement les
     déclarations explicites (`Availability.isAvailable: false`), pas
     l'absence de déclaration — et distinguées visuellement selon qu'elles
-    couvrent toute la journée ou juste une plage.** Le backend bloque
-    l'assignation dans tous les cas, y compris l'absence de déclaration
-    (`ShiftsService.ensureAvailable` — décision #8), mais côté affichage
-    (`lib/availability.ts` → `getUnavailabilityInfo`, qui renvoie
-    `'none' | 'full' | 'from' | 'until'`) l'absence de déclaration retombe
-    sur `'none'` : "pas encore renseigné" ne veut pas dire "refusé", et tout
-    marquer pareil noierait la grille (beaucoup de créneaux ne sont jamais
-    déclarés dans les données de démo).
+    couvrent toute la journée ou juste une plage.** Depuis la révision de
+    décision #8, l'absence de déclaration est aussi disponible côté backend
+    (plus seulement à l'affichage) : `getUnavailabilityInfo` (`'none' |
+    'full' | 'from' | 'until'`) et `ShiftsService.ensureAvailable`
+    s'accordent enfin sur ce cas, ce qui élimine la classe de bug où une
+    case avait l'air libre mais refusait pourtant toute dépose en silence
+    (incidents Sophie/Nabil/Eric, Lucas Petit/dustin Mupenda). "Pas encore
+    renseigné" continue de ne rien afficher (pas la même chose qu'un refus
+    déclaré, et tout marquer pareil noierait la grille — beaucoup de
+    créneaux ne sont jamais déclarés dans les données de démo), mais
+    maintenant cette case affichée comme libre l'est vraiment.
     - `'full'` (journée entière) : fond plein rose très pâle (`#FEF2F2`) +
       étiquette « Indisponible ».
     - `'from'`/`'until'` (plage partielle, décision #8) : même teinte mais
@@ -274,13 +304,14 @@ Cible : PME de 20-100 employés par site.
     - **Bascule (`toggleDay`)** : crée/édite toujours une exception
       ponctuelle (`Availability` avec `specificDate` = la date exacte de
       cette occurrence dans la semaine affichée), jamais l'enregistrement
-      `dayOfWeek`. Exception à cette règle : la toute première bascule vers
-      Disponible sur un jour de semaine qui n'a jamais rien de déclaré crée
-      un enregistrement `dayOfWeek` avec `isAvailable: true` — sinon ce
-      jour resterait bloqué indéfiniment (absence de déclaration = refusé
-      par défaut, décision #8) et il faudrait le redéclarer chaque semaine ;
-      ce n'est pas "poser une récurrence d'indisponibilité", c'est établir
-      la ligne de base disponible sans laquelle l'écran serait inutilisable.
+      `dayOfWeek`. Depuis la révision de décision #8 (absence de déclaration
+      = disponible par défaut, plus bloqué), un jour de semaine qui n'a
+      jamais rien de déclaré s'affiche déjà "Disponible" sans qu'il faille
+      rien créer : l'ancien "bootstrap" (première bascule vers Disponible ->
+      création d'un enregistrement `dayOfWeek` récurrent, pour éviter que le
+      jour reste bloqué indéfiniment) a été supprimé, devenu inutile. Ne
+      recréer QUE l'exception ponctuelle pour marquer Indisponible reste la
+      règle ; il n'y a plus de cas particulier au premier passage.
     - **« Rendre récurrente » / « Indisponibilité récurrente (toute la
       journée) »** (`applyRecurringFullDayBlock`) — seul point d'entrée qui
       pose ou renforce un blocage `dayOfWeek` (`isAvailable: false`, journée
@@ -572,6 +603,93 @@ Cible : PME de 20-100 employés par site.
       sur une base ayant déjà des candidatures plantait sur une violation de
       contrainte FK. `shiftOfferCandidate.deleteMany` ajouté juste avant.
 
+26. **Couleur d'un shift = mémorisée par id (localStorage), jamais un hash
+    recalculé — web-manager uniquement.** Avant cette décision,
+    `getShiftPalette(shift.id)` dérivait la couleur d'un hash déterministe
+    de l'id parmi 4 teintes : stable dans le temps, mais deux shifts du
+    même jour pouvaient coïncider sur la même couleur même à faible nombre
+    (peu de teintes, hash non garanti sans collision). `shiftPalette`
+    (`ui-tokens`) est passé à 8 teintes (ajout vert/ambre/cyan/indigo, même
+    famille de ton que les 4 d'origine) et `lib/shiftColor.ts`
+    (`resolveShiftColors`) remplace le hash par un index mémorisé en
+    `localStorage` (`horaires:shift-colors`, id -> index) :
+    - Un shift déjà vu garde exactement le même index pour toujours (pas de
+      recalcul au reload, ni s'il change de jour ensuite).
+    - Un shift jamais vu reçoit la plus petite teinte encore libre PARMI LES
+      AUTRES SHIFTS DU MÊME JOUR (regroupement par `toDateString()`) —
+      garanti sans collision tant qu'il y a moins de 9 shifts ce jour-là.
+      Au-delà, une répétition devient inévitable (8 teintes, nombre fini).
+    - Un shift créé depuis un modèle (`PlanningPage.placeTemplate`) hérite
+      directement de la couleur DE CE MODÈLE (`assignInheritedShiftColor`,
+      appelé juste après la création) au lieu de se voir attribuer une
+      teinte via la règle ci-dessus — la carte du planning et la carte du
+      modèle dont elle vient restent visuellement la même dès le dépôt.
+    - `ShiftCard`/`PlanningGridCell` reçoivent la couleur déjà résolue en
+      prop (`getShiftPalette`, calculé une fois dans `PlanningPage` via
+      `useMemo`/`useCallback`) plutôt que de la recalculer chacun de leur
+      côté.
+    - Modèles (`ShiftTemplate`, décision #13) : même principe mais encodé
+      directement sur l'objet (`paletteIndex`, choisi à la création par
+      `nextAvailablePaletteIndex` — plus petite teinte libre parmi les
+      autres modèles de la bibliothèque, recyclée quand un modèle est
+      supprimé) plutôt qu'en `localStorage` séparé, puisque `ShiftTemplate`
+      est déjà lui-même persisté en `localStorage` en entier (décision #13).
+    - La bibliothèque de modèles (`PlanningPage`, sous le formulaire
+      « Nouveau shift ») est triée par heure de début à l'affichage
+      (`sortedTemplates`, ne change ni l'ordre stocké ni l'attribution des
+      couleurs) et défile horizontalement au lieu de s'empiler sur
+      plusieurs lignes passé un certain nombre de modèles
+      (`templateRow` : `flexWrap: 'nowrap'`, `overflowX: 'auto'`,
+      `ShiftTemplateCard` en `flexShrink: 0`).
+
+27. **Sidebar (`AppShell`, web-manager) repliable en icônes seules, et fixe
+    à l'écran — jamais emportée par le scroll d'une page.** Repliable :
+    bouton dédié en bas de la sidebar (`toggleCollapsed`), état persisté en
+    `localStorage` (`horaires_sidebar_collapsed`) pour ne pas revenir
+    dépliée à chaque navigation/rechargement ; replié, la sidebar passe de
+    220px à 72px, les libellés de nav disparaissent (icônes seules,
+    `title` HTML en secours) et le nom de l'utilisateur/le texte
+    "Déconnexion" se masquent. Pensé pour la page Planning (grille large,
+    décision #12), mais s'applique à toutes les pages puisque `AppShell`
+    est commun. Fixe : `root` (conteneur racine) est passé de
+    `minHeight: 100vh` à `height: 100vh` et `main` a `minHeight: 0` en plus
+    de son `overflowY: auto` existant — avant ce correctif, `root`
+    grandissait avec le contenu de la page et c'est TOUTE LA PAGE (sidebar
+    comprise) qui défilait avec le scroll du navigateur ; désormais seul
+    `main` défile en interne, la sidebar reste plantée à l'écran quelle que
+    soit la hauteur de la page affichée.
+
+28. **checkin-mobile `PlanningScreen` (planning en lecture seule de
+    l'employé) : vue mois en principal, plus vue semaine.** Remplace
+    l'ancienne bande de 7 jours + liste des shifts de la semaine par un
+    calendrier mensuel façon app d'agenda classique :
+    - Grille de 42 cases (6 semaines, lundi en premier), jours hors mois
+      estompés, navigation par mois (chevrons). Aujourd'hui repéré par un
+      rond plein bleu ; un point sous le numéro signale un jour avec shift.
+    - En dessous : TOUS les shifts du mois affiché (pas un seul jour à la
+      fois), triés chronologiquement — la carte du jour courant ressort
+      par sa couleur (fond `primaryTint` + bordure `primary`) plutôt qu'un
+      simple libellé "Aujourd'hui" en texte.
+    - La grille (nav + jours) est un `View` fixe, HORS de la
+      `Animated.FlatList` qui affiche les cartes — seule la partie
+      "jours de la grille" (pas la barre de nav du mois) se réduit en
+      hauteur/opacité au scroll de la liste (`Animated.Value` piloté par
+      `onScroll`, `extrapolate: 'clamp'`), pour rester repliée plutôt que
+      de disparaître entièrement : le mois affiché et sa navigation restent
+      toujours accessibles. Changer de mois réinitialise le scroll et
+      redéplie la grille (sinon un nouveau mois s'ouvrirait à moitié
+      réduit).
+    - Liste sans rebond élastique (`bounces={false}`,
+      `alwaysBounceVertical={false}`, `overScrollMode="never"`) — voulu à
+      l'usage ; le pull-to-refresh (`RefreshControl`) fonctionne quand même,
+      son geste ne dépend pas du rebond général de la liste.
+    - Deux tentatives explorées et abandonnées sur cet écran (à ne pas
+      reproduire sans nouvelle demande explicite) : (1) une pile/éventail
+      en bas à droite regroupant les cartes sorties par le haut de l'écran
+      au scroll (jugée pas voulue telle quelle) ; (2) des cartes en
+      `position: sticky` pour qu'elles ne quittent jamais l'écran (mise de
+      côté sans suite donnée). L'écran actuel n'a ni l'un ni l'autre.
+
 ## Stack
 
 - Backend : NestJS + PostgreSQL + Prisma + Passport/JWT
@@ -619,7 +737,8 @@ reste "à faire".
   colorée par seuil
 - Écrans réels sur les 3 apps :
   - **checkin-mobile** : Login, Pointage (QR rotatif + fallback badge/PIN),
-    Planning (lecture seule, scopé employé), Disponibilités (bascule
+    Planning (lecture seule, scopé employé, vue mois en principal — voir
+    décision #28), Disponibilités (bascule
     Disponible/Indisponible par jour, sans heures à saisir ; en option, une
     indisponibilité peut être restreinte à un seul bord — « à partir de » OU
     « jusqu'à », pas les deux — via « Préciser une plage horaire », voir

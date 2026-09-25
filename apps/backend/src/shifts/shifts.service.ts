@@ -462,8 +462,17 @@ export class ShiftsService {
     const dateLabel = formatDate(dayStart);
     const shiftRangeLabel = `${formatMinutes(start.minutesOfDay)} et ${formatMinutes(end.minutesOfDay)}`;
 
+    // Aucune déclaration pour ce jour == disponible par défaut (décision #8
+    // révisée) : l'inverse ("pas de déclaration = bloqué") semblait plus sûr
+    // sur le papier, mais en pratique bloquait en silence des employés dont
+    // la grille planning n'affichait pourtant aucun signe d'indisponibilité
+    // (décision #14 traite déjà l'absence de déclaration comme 'none' à
+    // l'affichage) — un manager n'avait aucun moyen de deviner pourquoi une
+    // case visuellement libre refusait toute dépose. Un employé qui ne peut
+    // vraiment pas travailler un jour donné doit le déclarer explicitement
+    // (isAvailable: false) : c'est ce cas-là, pas le silence, qui bloque.
     if (!availability) {
-      throw new ConflictException(`Cet employé n'est pas disponible le ${dateLabel} entre ${shiftRangeLabel}`);
+      return;
     }
 
     // Un shift de nuit peut finir le lendemain en heure locale — on place

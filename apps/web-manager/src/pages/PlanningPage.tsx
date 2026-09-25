@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -9,7 +9,7 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core';
 import { ChevronLeft, ChevronRight, Plus, Send } from 'lucide-react';
-import { colors, spacing, radius, typography, shadows } from '@horaires/ui-tokens';
+import { colors, spacing, radius, typography, shadows, shiftPalette } from '@horaires/ui-tokens';
 import type { Availability, Shift, Site, User } from '@horaires/shared-types';
 import { ApiError } from '@horaires/api-client';
 import { apiClient, useAuth } from '../services/AuthService';
@@ -32,9 +32,14 @@ import {
   toHHmm,
   WEEKDAY_LABELS_FR,
 } from '../lib/date';
-import { getShiftPalette } from '../lib/shiftColor';
+import { assignInheritedShiftColor, resolveShiftColors } from '../lib/shiftColor';
 import { getUnavailabilityInfo } from '../lib/availability';
-import { loadShiftTemplates, saveShiftTemplates, type ShiftTemplate } from '../lib/shiftTemplates';
+import {
+  loadShiftTemplates,
+  saveShiftTemplates,
+  nextAvailablePaletteIndex,
+  type ShiftTemplate,
+} from '../lib/shiftTemplates';
 
 type ViewMode = 'week' | 'month';
 type WeekScope = 'week' | 'day';
@@ -149,6 +154,7 @@ export function PlanningPage() {
         startTime: templateStartTime,
         endTime: templateEndTime,
         roleNeeded: templateRole || undefined,
+        paletteIndex: nextAvailablePaletteIndex(templates),
       },
     ];
     setTemplates(next);
@@ -270,7 +276,7 @@ export function PlanningPage() {
   // à ce jour-là, et l'assigne dans le même geste si déposé sur la ligne
   // d'un employé.
   const placeTemplate = async (
-    template: { startTime: string; endTime: string; roleNeeded?: string },
+    template: { templateId: string; startTime: string; endTime: string; roleNeeded?: string },
     targetDateISO: string,
     targetEmployeeId: string | null,
   ) => {
@@ -292,6 +298,11 @@ export function PlanningPage() {
         roleNeeded: template.roleNeeded,
         status: 'draft',
       });
+      // Le shift déposé garde la couleur du modèle dont il vient, plutôt
+      // que de s'en voir attribuer une autre au prochain calcul de
+      // resolveShiftColors (voir lib/shiftColor.ts).
+      const sourceTemplate = templates.find((t) => t.id === template.templateId);
+      if (sourceTemplate) assignInheritedShiftColor(created.id, sourceTemplate.paletteIndex);
       if (targetEmployeeId) {
         try {
           await apiClient.assignShift(created.id, targetEmployeeId);
@@ -361,12 +372,26 @@ export function PlanningPage() {
     setWeekScope('week');
   };
 
+  // Couleur mémorisée par shift (lib/shiftColor.ts) — un shift garde
+  // toujours la même couleur, jamais un hash recalculé à chaque rendu.
+  const shiftColors = useMemo(() => resolveShiftColors(shifts), [shifts]);
+  const getShiftPalette = useCallback(
+    (shiftId: string) => shiftColors.get(shiftId) ?? shiftPalette[0],
+    [shiftColors],
+  );
+
   // Un employé sans site assigné (siteId: null) reste visible sur TOUS les
   // sites plutôt que de disparaître partout tant qu'il n'a pas été rattaché
   // via la page Équipe — voir CLAUDE.md décision #25.
   const employees = users.filter(
     (u) => u.role === 'employee' && (u.siteId == null || u.siteId === selectedSiteId),
   );
+  // Triés par heure de début pour la bibliothèque de modèles — "HH:mm" se
+  // compare correctement en chaîne (zero-padded), pas besoin de parser.
+  // N'affecte ni l'ordre stocké (saveShiftTemplates garde l'ordre de
+  // création) ni l'attribution des couleurs (nextAvailablePaletteIndex ne
+  // dépend pas de l'ordre), uniquement l'affichage.
+  const sortedTemplates = [...templates].sort((a, b) => a.startTime.localeCompare(b.startTime));
   const allDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   const days = weekScope === 'day' ? [selectedDay] : allDays;
 
@@ -513,7 +538,7 @@ export function PlanningPage() {
 
         {templates.length > 0 ? (
           <div style={styles.templateRow}>
-            {templates.map((template) => (
+            {sortedTemplates.map((template) => (
               <ShiftTemplateCard key={template.id} template={template} onDelete={deleteTemplate} />
             ))}
           </div>
@@ -579,6 +604,7 @@ export function PlanningPage() {
                   dayShifts={shiftsForDay(date)}
                   employees={employees}
                   availabilities={availabilities}
+                  getShiftPalette={getShiftPalette}
                   onDeleteShift={deleteShift}
                   onDuplicateShift={duplicateShift}
                   onAssign={assignEmployee}
@@ -603,6 +629,7 @@ export function PlanningPage() {
                       dayShifts={shiftsForDay(date)}
                       employees={employees}
                       availabilities={availabilities}
+                      getShiftPalette={getShiftPalette}
                       onDeleteShift={deleteShift}
                       onDuplicateShift={duplicateShift}
                       onAssign={assignEmployee}
@@ -636,7 +663,17 @@ export function PlanningPage() {
             <span>{formatDurationLabel(durationMinutes(activeDrag.startsAt, activeDrag.endsAt))}</span>
           </div>
         ) : activeDrag?.type === 'template' ? (
-          <div style={{ ...styles.overlayChip, ...getShiftPalette(activeDrag.templateId) }}>
+          <div
+            style={{
+              ...styles.overlayChip,
+              // Même couleur que la carte statique (paletteIndex stocké sur
+              // le modèle), pas un hash de son id — sinon l'aperçu en train
+              // d'être glissé changerait de teinte par rapport à sa carte.
+              ...shiftPalette[
+                (templates.find((t) => t.id === activeDrag.templateId)?.paletteIndex ?? 0) % shiftPalette.length
+              ],
+            }}
+          >
             <strong>
               {activeDrag.startTime} - {activeDrag.endTime}
             </strong>
@@ -766,7 +803,18 @@ const styles: Record<string, React.CSSProperties> = {
   },
   error: { color: colors.danger, fontSize: typography.sizes.sm, marginTop: spacing.sm },
   muted: { color: colors.textSecondary },
-  templateRow: { display: 'flex', gap: spacing.sm, flexWrap: 'wrap', marginTop: spacing.md },
+  // Défile horizontalement au lieu de s'empiler sur plusieurs lignes passé
+  // un certain nombre de modèles — la bibliothèque reste sur une seule
+  // ligne compacte quelle que soit sa taille (padding du bas pour laisser
+  // de la place à la scrollbar sans qu'elle chevauche les cartes).
+  templateRow: {
+    display: 'flex',
+    gap: spacing.sm,
+    flexWrap: 'nowrap',
+    overflowX: 'auto',
+    marginTop: spacing.md,
+    paddingBottom: spacing.xs,
+  },
   emptyTemplates: { fontSize: typography.sizes.xs, color: colors.textSecondary, fontStyle: 'italic', marginTop: spacing.md, marginBottom: 0 },
   gridWrapper: {
     border: `1px solid ${colors.border}`,
@@ -843,4 +891,5 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     boxShadow: shadows.lg,
   },
+
 };

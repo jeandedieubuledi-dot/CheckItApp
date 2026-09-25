@@ -2,6 +2,7 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { randomBytes } from 'node:crypto';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { InviteUserDto } from './dto/invite-user.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { SetPinDto } from './dto/set-pin.dto';
@@ -26,7 +27,10 @@ const SAFE_USER_SELECT = {
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly realtime: RealtimeGateway,
+  ) {}
 
   // `siteId` optionnel : filtre l'annuaire pour un site donné, utilisé par la
   // grille planning (web-manager) pour ne proposer que les employés qui y
@@ -121,15 +125,42 @@ export class UsersService {
   // vide (réglage entreprise par défaut / aucun site) ; un champ absent du
   // DTO (undefined) reste inchangé — Prisma ignore les clés `undefined`.
   async updateSettings(companyId: string, id: string, dto: UpdateUserSettingsDto) {
-    await this.findOne(companyId, id);
+    const existing = await this.findOne(companyId, id);
     if (dto.siteId) {
       await this.ensureSiteInCompany(companyId, dto.siteId);
     }
-    return this.prisma.user.update({
+    // `dto.siteId === undefined` veut dire "champ absent, ne pas toucher" —
+    // seule une vraie valeur (site différent, ou null pour désassigner) fait
+    // changer de site.
+    const siteChanging = dto.siteId !== undefined && dto.siteId !== existing.siteId;
+
+    const updated = await this.prisma.user.update({
       where: { id },
       data: { gpsClockInEnabled: dto.gpsClockInEnabled, siteId: dto.siteId },
       select: SAFE_USER_SELECT,
     });
+
+    if (siteChanging) {
+      // Changer un employé de site rend son horaire à venir obsolète (il ne
+      // travaillera plus là où ces shifts étaient prévus) — on annule ses
+      // assignations futures plutôt que de les laisser pointer vers un site
+      // qu'il a quitté. `cancelled` (pas une suppression) : le shift lui-même
+      // reste, il retombe simplement "non assigné" dans le pool (décision
+      // #12) pour qu'un autre employé puisse le reprendre. Seules les
+      // assignations À VENIR sont touchées — l'historique de pointage reste
+      // intact.
+      await this.prisma.shiftAssignment.updateMany({
+        where: {
+          userId: id,
+          status: { not: 'cancelled' },
+          shift: { startsAt: { gt: new Date() } },
+        },
+        data: { status: 'cancelled' },
+      });
+      this.realtime.emitToCompany(companyId, 'shifts:changed');
+    }
+
+    return updated;
   }
 
   async setPin(companyId: string, id: string, dto: SetPinDto) {

@@ -372,15 +372,18 @@ describe('ShiftsService', () => {
       expect(realtime.emitToCompany).not.toHaveBeenCalled();
     });
 
-    it('blocks assigning when the employee declared no availability at all for that day', async () => {
+    it('allows assigning when the employee has declared no availability at all for that day (available by default)', async () => {
       prisma.shift.findFirst.mockResolvedValue(shift1);
       prisma.user.findFirst.mockResolvedValue({ id: 'user-1' });
       prisma.availability.findFirst.mockResolvedValue(null);
+      prisma.shiftAssignment.findFirst.mockResolvedValue(null);
+      prisma.shiftAssignment.create.mockResolvedValue({ id: 'assignment-1' });
 
-      await expect(service.assign('company-a', 'shift-1', { userId: 'user-1' })).rejects.toThrow(
-        ConflictException,
-      );
-      expect(prisma.shiftAssignment.create).not.toHaveBeenCalled();
+      await service.assign('company-a', 'shift-1', { userId: 'user-1' });
+
+      expect(prisma.shiftAssignment.create).toHaveBeenCalledWith({
+        data: { shiftId: 'shift-1', userId: 'user-1', status: 'assigned' },
+      });
     });
 
     it('blocks assigning when the employee marked that day as fully unavailable (no range specified)', async () => {
@@ -553,11 +556,11 @@ describe('ShiftsService', () => {
       });
       prisma.site.findFirst.mockResolvedValue({ timezone: 'Europe/Brussels' });
       prisma.user.findFirst.mockResolvedValue({ id: 'user-1' });
-      prisma.availability.findFirst.mockResolvedValue(null); // -> ConflictException
+      prisma.availability.findFirst.mockResolvedValue(null); // aucune déclaration -> disponible par défaut
+      prisma.shiftAssignment.findFirst.mockResolvedValue(null);
+      prisma.shiftAssignment.create.mockResolvedValue({ id: 'assignment-1' });
 
-      await expect(service.assign('company-a', 'shift-night', { userId: 'user-1' })).rejects.toThrow(
-        ConflictException,
-      );
+      await service.assign('company-a', 'shift-night', { userId: 'user-1' });
 
       // lundi = 0 (heure locale), et pas dimanche = 6 (date UTC).
       expect(prisma.availability.findFirst).toHaveBeenLastCalledWith({

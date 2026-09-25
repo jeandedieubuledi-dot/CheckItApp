@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, FlatList, StyleSheet, RefreshControl, Pressable } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, Animated, StyleSheet, RefreshControl, Pressable } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing } from '@horaires/ui-tokens';
@@ -16,11 +16,24 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const PENDING_STATUSES = new Set(['offered', 'swap_pending']);
-const DAY_LETTERS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+const WEEKDAY_LABELS = ['Lun.', 'Mar.', 'Mer.', 'Jeu.', 'Ven.', 'Sam.', 'Dim.'];
 const MONTHS = [
   'janvier', 'février', 'mars', 'avril', 'mai', 'juin',
   'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre',
 ];
+// Distance de scroll (px) sur laquelle la grille se réduit complètement —
+// au-delà, elle reste minimisée (extrapolate: 'clamp').
+const COLLAPSE_DISTANCE = 130;
+
+function startOfMonth(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function addDays(date: Date, days: number) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
 
 function startOfWeek(date: Date) {
   const d = new Date(date);
@@ -34,14 +47,30 @@ function isSameDay(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
+function capitalize(s: string) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 // Lecture seule — la création/édition d'horaires est exclusive à web-manager
 // (voir CLAUDE.md, décision d'architecture). Cet écran ne fait qu'afficher.
+//
+// Vue mois en principal : le calendrier (barre de mois + grille) reste fixe
+// au-dessus d'une liste qui montre TOUS les shifts du mois affiché (pas
+// juste un jour), la carte d'aujourd'hui ressortant par sa couleur. La
+// grille de jours se réduit progressivement (hauteur + opacité, animées sur
+// le scroll de la liste) quand on glisse vers le haut pour regarder les
+// cartes suivantes — seule la barre de mois (nav + libellé) reste toujours
+// visible, jamais emportée par le scroll.
 export function PlanningScreen() {
   const { user, socket } = useAuth();
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [sites, setSites] = useState<Site[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [weekOffset, setWeekOffset] = useState(0);
+  const today = useMemo(() => new Date(), []);
+  const [monthAnchor, setMonthAnchor] = useState(() => startOfMonth(today));
+  const [gridHeight, setGridHeight] = useState<number | null>(null);
+  const scrollY = useRef(new Animated.Value(0)).current;
+  const listRef = useRef<Animated.FlatList<Shift> | null>(null);
 
   const load = useCallback(async () => {
     const [shiftList, siteList] = await Promise.all([apiClient.getShifts(), apiClient.getSites()]);
@@ -74,30 +103,89 @@ export function PlanningScreen() {
 
   const siteName = (siteId: string) => sites.find((s) => s.id === siteId)?.name ?? siteId;
 
-  const today = useMemo(() => new Date(), []);
-  const weekStart = useMemo(() => {
-    const start = startOfWeek(today);
-    start.setDate(start.getDate() + weekOffset * 7);
-    return start;
-  }, [today, weekOffset]);
-  const weekDays = useMemo(
-    () => Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(weekStart);
-      d.setDate(weekStart.getDate() + i);
-      return d;
-    }),
-    [weekStart],
-  );
-  const weekEnd = weekDays[6];
-  const weekLabel =
-    weekStart.getMonth() === weekEnd.getMonth()
-      ? `${weekStart.getDate()} – ${weekEnd.getDate()} ${MONTHS[weekStart.getMonth()]}`
-      : `${weekStart.getDate()} ${MONTHS[weekStart.getMonth()]} – ${weekEnd.getDate()} ${MONTHS[weekEnd.getMonth()]}`;
+  // Grille de 42 cases (6 semaines) à partir du lundi de la semaine du 1er
+  // du mois affiché — jours hors mois inclus mais estompés, comme n'importe
+  // quel calendrier mensuel classique.
+  const gridDays = useMemo(() => {
+    const gridStart = startOfWeek(startOfMonth(monthAnchor));
+    return Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
+  }, [monthAnchor]);
 
-  const weekShifts = useMemo(
-    () => shifts.filter((s) => weekDays.some((d) => isSameDay(d, new Date(s.startsAt)))),
-    [shifts, weekDays],
+  const shiftsByDay = useMemo(() => {
+    const map = new Set<string>();
+    for (const s of shifts) map.add(new Date(s.startsAt).toDateString());
+    return map;
+  }, [shifts]);
+
+  // Tous les shifts du mois affiché, triés par date — plus un seul jour à
+  // la fois : on veut voir tout le mois défiler sous le calendrier.
+  const monthShifts = useMemo(
+    () =>
+      shifts.filter((s) => {
+        const d = new Date(s.startsAt);
+        return d.getFullYear() === monthAnchor.getFullYear() && d.getMonth() === monthAnchor.getMonth();
+      }),
+    [shifts, monthAnchor],
   );
+
+  const goToMonth = (delta: number) => {
+    setMonthAnchor((prev) => new Date(prev.getFullYear(), prev.getMonth() + delta, 1));
+    // Remonte la liste et redéplie la grille — un nouveau mois se présente
+    // toujours en entier, pas à moitié réduit sur le scroll du précédent.
+    scrollY.setValue(0);
+    listRef.current?.scrollToOffset({ offset: 0, animated: false });
+  };
+
+  const monthLabel = `${capitalize(MONTHS[monthAnchor.getMonth()])} ${monthAnchor.getFullYear()}`;
+
+  const animatedGridStyle =
+    gridHeight === null
+      ? undefined
+      : {
+          height: scrollY.interpolate({
+            inputRange: [0, COLLAPSE_DISTANCE],
+            outputRange: [gridHeight, 0],
+            extrapolate: 'clamp' as const,
+          }),
+          opacity: scrollY.interpolate({
+            inputRange: [0, COLLAPSE_DISTANCE * 0.6],
+            outputRange: [1, 0],
+            extrapolate: 'clamp' as const,
+          }),
+        };
+
+  const renderCard = ({ item }: { item: Shift }) => {
+    const mine = item.assignments?.find((a) => a.userId === user?.id);
+    const pending = mine ? PENDING_STATUSES.has(mine.status) : false;
+    const startDate = new Date(item.startsAt);
+    const isToday = isSameDay(startDate, today);
+    return (
+      <View style={[styles.card, isToday ? styles.cardToday : null]}>
+        <View style={styles.cardTop}>
+          <Text style={styles.cardDay}>
+            {isToday
+              ? "Aujourd'hui"
+              : startDate.toLocaleDateString('fr-BE', { weekday: 'long', day: '2-digit', month: 'long' })}
+          </Text>
+          {mine ? (
+            <View style={[styles.chip, pending ? styles.chipPending : styles.chipConfirmed]}>
+              <Text style={styles.chipText}>{STATUS_LABELS[mine.status] ?? mine.status}</Text>
+            </View>
+          ) : null}
+        </View>
+        <Text style={styles.time}>
+          {startDate.toLocaleTimeString('fr-BE', { hour: '2-digit', minute: '2-digit' })}
+          {' – '}
+          {new Date(item.endsAt).toLocaleTimeString('fr-BE', { hour: '2-digit', minute: '2-digit' })}
+        </Text>
+        <View style={styles.siteRow}>
+          <Ionicons name="location-outline" size={13} color={colors.textSecondary} />
+          <Text style={styles.site}>{siteName(item.siteId)}</Text>
+          {item.roleNeeded ? <Text style={styles.role}> · {item.roleNeeded}</Text> : null}
+        </View>
+      </View>
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -110,66 +198,72 @@ export function PlanningScreen() {
         </View>
       </View>
 
-      <View style={styles.weekNav}>
-        <Pressable style={styles.weekArrow} onPress={() => setWeekOffset((w) => w - 1)}>
-          <Ionicons name="chevron-back" size={15} color={colors.textSecondary} />
-        </Pressable>
-        <Text style={styles.weekLabel}>{weekLabel}</Text>
-        <Pressable style={styles.weekArrow} onPress={() => setWeekOffset((w) => w + 1)}>
-          <Ionicons name="chevron-forward" size={15} color={colors.textSecondary} />
-        </Pressable>
-      </View>
+      {/* Toujours visible, jamais emporté par le scroll de la liste — seule
+          la partie grille (ci-dessous) se réduit. */}
+      <View style={styles.calendarCard}>
+        <View style={styles.calendarNav}>
+          <Pressable style={styles.calendarArrow} onPress={() => goToMonth(-1)}>
+            <Ionicons name="chevron-back" size={18} color={colors.textSecondary} />
+          </Pressable>
+          <Text style={styles.calendarMonthLabel}>{monthLabel}</Text>
+          <Pressable style={styles.calendarArrow} onPress={() => goToMonth(1)}>
+            <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
+          </Pressable>
+        </View>
 
-      <View style={styles.dayStrip}>
-        {weekDays.map((d) => {
-          const today_ = isSameDay(d, today);
-          return (
-            <View key={d.toISOString()} style={[styles.dayChip, today_ && styles.dayChipToday]}>
-              <Text style={[styles.dayLetter, today_ && styles.dayLetterToday]}>
-                {DAY_LETTERS[(d.getDay() + 6) % 7]}
-              </Text>
-              <Text style={[styles.dayNum, today_ && styles.dayNumToday]}>{d.getDate()}</Text>
+        <Animated.View style={[{ overflow: 'hidden' }, animatedGridStyle]}>
+          <View onLayout={(e) => setGridHeight((prev) => prev ?? e.nativeEvent.layout.height)}>
+            <View style={styles.weekdayRow}>
+              {WEEKDAY_LABELS.map((label) => (
+                <Text key={label} style={styles.weekdayLabel}>
+                  {label}
+                </Text>
+              ))}
             </View>
-          );
-        })}
-      </View>
-
-      <FlatList
-        data={weekShifts}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContent}
-        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={refresh} />}
-        ListEmptyComponent={<Text style={styles.empty}>Aucun shift cette semaine-là.</Text>}
-        renderItem={({ item }) => {
-          const mine = item.assignments?.find((a) => a.userId === user?.id);
-          const pending = mine ? PENDING_STATUSES.has(mine.status) : false;
-          const startDate = new Date(item.startsAt);
-          const dayLabel = isSameDay(startDate, today)
-            ? `Aujourd'hui — ${startDate.toLocaleDateString('fr-BE', { weekday: 'long', day: '2-digit' })}`
-            : startDate.toLocaleDateString('fr-BE', { weekday: 'long', day: '2-digit', month: 'long' });
-          return (
-            <View style={styles.card}>
-              <View style={styles.cardTop}>
-                <Text style={styles.cardDay}>{dayLabel}</Text>
-                {mine ? (
-                  <View style={[styles.chip, pending ? styles.chipPending : styles.chipConfirmed]}>
-                    <Text style={styles.chipText}>{STATUS_LABELS[mine.status] ?? mine.status}</Text>
+            <View style={styles.daysGrid}>
+              {gridDays.map((d) => {
+                const inMonth = d.getMonth() === monthAnchor.getMonth();
+                const isToday = isSameDay(d, today);
+                const hasShift = shiftsByDay.has(d.toDateString());
+                return (
+                  <View key={d.toISOString()} style={styles.dayCell}>
+                    <View style={[styles.dayCircle, isToday ? styles.dayCircleToday : null]}>
+                      <Text
+                        style={[
+                          styles.dayNumber,
+                          !inMonth ? styles.dayNumberMuted : null,
+                          isToday ? styles.dayNumberToday : null,
+                        ]}
+                      >
+                        {d.getDate()}
+                      </Text>
+                    </View>
+                    <View style={[styles.dayDot, hasShift ? styles.dayDotFilled : null]} />
                   </View>
-                ) : null}
-              </View>
-              <Text style={styles.time}>
-                {startDate.toLocaleTimeString('fr-BE', { hour: '2-digit', minute: '2-digit' })}
-                {' – '}
-                {new Date(item.endsAt).toLocaleTimeString('fr-BE', { hour: '2-digit', minute: '2-digit' })}
-              </Text>
-              <View style={styles.siteRow}>
-                <Ionicons name="location-outline" size={13} color={colors.textSecondary} />
-                <Text style={styles.site}>{siteName(item.siteId)}</Text>
-                {item.roleNeeded ? <Text style={styles.role}> · {item.roleNeeded}</Text> : null}
-              </View>
+                );
+              })}
             </View>
-          );
-        }}
+          </View>
+        </Animated.View>
+      </View>
+
+      <Animated.FlatList
+        ref={listRef}
+        data={monthShifts}
+        keyExtractor={(item: Shift) => item.id}
+        contentContainerStyle={styles.listContent}
+        showsVerticalScrollIndicator={false}
+        // Pas de rebond élastique en bas de liste (voulu à l'usage) — le
+        // pull-to-refresh (RefreshControl) fonctionne quand même, son geste
+        // ne dépend pas du rebond général de la liste.
+        bounces={false}
+        alwaysBounceVertical={false}
+        overScrollMode="never"
+        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={refresh} />}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
+        scrollEventThrottle={16}
+        ListEmptyComponent={<Text style={styles.empty}>Aucun shift ce mois-ci.</Text>}
+        renderItem={renderCard}
       />
     </View>
   );
@@ -191,38 +285,52 @@ const styles = StyleSheet.create({
   },
   avatarText: { fontFamily: fonts.displaySemiBold, fontSize: 14, color: colors.primary },
 
-  weekNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 22 },
-  weekLabel: { fontSize: 14, fontWeight: '600', color: colors.textSecondary, textTransform: 'capitalize' },
-  weekArrow: {
-    width: 30,
-    height: 30,
-    borderRadius: 10,
+  calendarCard: {
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderRadius: 18,
+    padding: 14,
+    marginTop: 18,
+    shadowColor: '#111827',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  calendarNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  calendarArrow: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
+  calendarMonthLabel: { fontFamily: fonts.displaySemiBold, fontSize: 14.5, color: colors.textPrimary },
+
+  weekdayRow: { flexDirection: 'row', marginTop: 14, marginBottom: 4 },
+  weekdayLabel: {
+    width: `${100 / 7}%`,
+    textAlign: 'center',
+    fontSize: 10.5,
+    color: colors.textSecondary,
+  },
+
+  daysGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  dayCell: {
+    width: `${100 / 7}%`,
+    alignItems: 'center',
+    paddingVertical: 4,
+    gap: 3,
+  },
+  dayCircle: {
+    width: 29,
+    height: 29,
+    borderRadius: 14.5,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  dayCircleToday: { backgroundColor: colors.primary },
+  dayNumber: { fontSize: 13.5, color: colors.textPrimary },
+  dayNumberMuted: { color: colors.border },
+  dayNumberToday: { color: colors.surface, fontWeight: '700' },
+  dayDot: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: 'transparent' },
+  dayDotFilled: { backgroundColor: colors.primary },
 
-  dayStrip: { flexDirection: 'row', gap: 6, marginTop: 14 },
-  dayChip: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    borderRadius: 16,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  dayChipToday: { backgroundColor: colors.primary, borderColor: colors.primary },
-  dayLetter: { fontSize: 10.5, fontWeight: '600', color: colors.textSecondary, textTransform: 'uppercase' },
-  dayLetterToday: { color: 'rgba(255,255,255,0.75)' },
-  dayNum: { fontFamily: fonts.displaySemiBold, fontSize: 14, color: colors.textPrimary },
-  dayNumToday: { color: colors.surface },
-
-  listContent: { paddingTop: 24, paddingBottom: 110, gap: 12 },
-  empty: { color: colors.textSecondary, textAlign: 'center', marginTop: spacing.xl },
+  listContent: { paddingTop: 16, paddingBottom: 110, gap: 12 },
+  empty: { color: colors.textSecondary, marginTop: spacing.sm },
   card: {
     backgroundColor: colors.surface,
     borderRadius: 18,
@@ -235,6 +343,9 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
+  // Ressort du reste de la liste — même teinte que le reste de l'app pour
+  // "aujourd'hui" (avatar, jour courant du calendrier ci-dessus).
+  cardToday: { backgroundColor: colors.primaryTint, borderWidth: 1.5, borderColor: colors.primary },
   cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   cardDay: { fontSize: 12, fontWeight: '600', color: colors.textSecondary, textTransform: 'capitalize' },
   chip: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999 },

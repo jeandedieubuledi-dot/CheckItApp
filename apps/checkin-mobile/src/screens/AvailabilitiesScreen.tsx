@@ -112,17 +112,22 @@ function RecurringBadge() {
 // indisponible, on peut préciser un seul bord ("à partir de" OU "jusqu'à",
 // pas les deux) pour ne bloquer qu'une partie de la journée.
 //
+// Un jour jamais déclaré s'affiche "Disponible" par défaut (voir CLAUDE.md
+// décision #8 révisée) — plus besoin de le déclarer explicitement pour
+// pouvoir y être assigné, contrairement à avant. Ce qui bloque, c'est
+// l'indisponibilité déclarée, jamais son absence.
+//
 // **La simple bascule ne concerne QUE le jour affiché** (crée/édite une
 // exception ponctuelle, `specificDate` = la date exacte de cette occurrence
 // dans la semaine affichée) — elle ne touche jamais la récurrence. Seul le
 // bouton dédié « Rendre récurrente » / « Indisponibilité récurrente (toute
 // la journée) » pose un blocage `dayOfWeek`, qui s'applique lui à toutes les
 // semaines suivantes (voir CLAUDE.md décision #8 pour la précédence
-// specificDate > dayOfWeek). Exception : la toute première bascule vers
-// Disponible sur un jour jamais déclaré établit une disponibilité
-// récurrente par défaut — sinon ce jour resterait bloqué indéfiniment
-// (absence de déclaration = refusé côté backend) et il faudrait le
-// redéclarer chaque semaine.
+// specificDate > dayOfWeek). Basculer un jour jamais déclaré vers
+// Indisponible crée directement une exception ponctuelle (pas de récurrence
+// à établir en contrepartie, contrairement à l'ancien comportement) ; le
+// re-basculer vers Disponible supprime cette exception et retombe sur le
+// défaut "Disponible" sans rien recréer.
 //
 // Remettre disponible un jour bloqué par une récurrence active (pas une
 // exception ponctuelle) ouvre un choix explicite : garder la récurrence
@@ -197,14 +202,15 @@ export function AvailabilitiesScreen() {
   // Bascule Disponible <-> Indisponible pour LE JOUR AFFICHÉ SEULEMENT —
   // crée/édite une exception ponctuelle (specificDate), ne touche jamais la
   // récurrence. Seul le bouton dédié (applyRecurringFullDayBlock) pose un
-  // blocage récurrent. Exception : si ce jour de semaine n'a jamais rien de
-  // déclaré et qu'on bascule vers Disponible, on établit une disponibilité
-  // récurrente par défaut (sinon ce jour resterait bloqué indéfiniment).
+  // blocage récurrent. Un jour jamais déclaré est déjà "Disponible" par
+  // défaut (décision #8 révisée) : le premier tap dessus déclare une
+  // indisponibilité ponctuelle, il n'y a plus besoin d'établir quoi que ce
+  // soit pour le rendre disponible puisqu'il l'est déjà.
   const toggleDay = async (day: number) => {
     const recurring = recordForDay.get(day);
     const override = overrideForDay.get(day);
     const effective = override ?? recurring;
-    const goingAvailable = !(effective?.isAvailable ?? false);
+    const goingAvailable = !(effective?.isAvailable ?? true);
 
     // La récurrence est ce qui bloque ce jour (pas une exception ponctuelle
     // qui la masquerait déjà) : demander d'abord quoi faire des semaines
@@ -234,12 +240,12 @@ export function AvailabilitiesScreen() {
         }
       } else if (override) {
         // Une exception ponctuelle est ce qui bloquait ce jour précis (pas de
-        // récurrence active en dessous) : la supprimer suffit à le libérer.
+        // récurrence active en dessous) : la supprimer suffit à le libérer —
+        // retombe sur le défaut "Disponible", rien à recréer.
         await apiClient.deleteAvailability(override.id);
-      } else if (!recurring) {
-        await apiClient.createAvailability({ dayOfWeek: day, startTime: FULL_DAY_START, endTime: FULL_DAY_END });
       }
-      // Sinon : la récurrence dit déjà isAvailable:true, rien à faire.
+      // Sinon (recurring dit déjà isAvailable:true, ou rien n'est déclaré et
+      // le défaut suffit) : rien à faire.
       await load();
     } catch (err) {
       setBanner({ kind: 'error', message: err instanceof Error ? err.message : 'Échec de la mise à jour' });
@@ -409,7 +415,8 @@ export function AvailabilitiesScreen() {
           const record = recordForDay.get(day);
           const override = overrideForDay.get(day);
           const effective = override ?? record;
-          const available = effective?.isAvailable ?? false;
+          // Rien de déclaré == Disponible par défaut (décision #8 révisée).
+          const available = effective?.isAvailable ?? true;
           const fullDayBlock = isFullDayBlock(effective);
           const busy = busyDay === day;
           const editing = editingDay === day;
