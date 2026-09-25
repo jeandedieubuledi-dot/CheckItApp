@@ -448,12 +448,28 @@ Cible : PME de 20-100 employés par site.
       déjà ces données sous une forme différente (shift imbriqué dans une
       grille, présence aplatie, etc.) — fusionner aurait dupliqué cette
       logique de mise en forme à chaque écran.
-    - Émis par `ShiftsService` (les 8 méthodes de mutation : create, update,
-      remove, assign, offerAssignment, acceptOffer, approveOffer,
-      rejectOffer), `TimeEntriesService` (les 4 chemins de pointage +
-      update), `AvailabilitiesService` (create, update, remove) — toujours
-      juste avant le `return`, jamais avant que la transaction Prisma ait
-      committé.
+    - Émis par `ShiftsService` (`offerAssignment`, `acceptOffer`,
+      `approveOffer`, `rejectOffer`), `TimeEntriesService` (les 4 chemins de
+      pointage + update), `AvailabilitiesService` (create, update, remove) —
+      toujours juste avant le `return`, jamais avant que la transaction
+      Prisma ait committé.
+    - **Exception délibérée dans `ShiftsService` : `create`, `update` (sauf
+      passage à `published`), `remove` et `assign` n'émettent PAS
+      `shifts:changed`.** Construire le planning (créer un brouillon,
+      l'assigner en glisser-déposer, ajuster ses horaires, le supprimer) est
+      un travail de préparation, invisible de toute façon pour un employé
+      tant que le shift reste `draft` (décision #15) — rafraîchir en direct
+      l'écran des AUTRES managers à chaque geste de préparation ne fait que
+      perturber leur propre glisser-déposer en cours, pour un bénéfice nul
+      tant que rien n'est publié. Seul le vrai passage à `status:
+      'published'` dans `update()` (bouton *Publier* d'une carte, "Publier N
+      brouillons", ou l'éditeur générique de shift) déclenche l'émission :
+      c'est le seul moment où le contenu change réellement pour quelqu'un
+      d'autre. Ne pas réintroduire d'émission sur les autres branches de ces
+      méthodes sans revenir sur ce choix produit explicite. Les mutations du
+      marché d'échange (`offerAssignment`/`acceptOffer`/`approveOffer`/
+      `rejectOffer`) restent inchangées : ce n'est pas de la préparation de
+      planning, la page "Échanges à valider" doit rester réactive en direct.
     - Côté front, `packages/api-client/src/realtime.ts` expose
       `connectRealtime(baseUrl, token)` (force `transports: ['websocket']`,
       plus fiable que le long-polling XHR sur React Native). Les deux

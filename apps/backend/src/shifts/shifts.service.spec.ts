@@ -152,6 +152,19 @@ describe('ShiftsService', () => {
       ).rejects.toThrow(BadRequestException);
       expect(prisma.shift.create).not.toHaveBeenCalled();
     });
+
+    it('does not emit a realtime event — creating a draft is planning prep, not a publish', async () => {
+      prisma.site.findFirst.mockResolvedValue({ id: 'site-1', companyId: 'company-a' });
+      prisma.shift.create.mockResolvedValue({ id: 'shift-1' });
+
+      await service.create('company-a', 'manager-1', {
+        siteId: 'site-1',
+        startsAt: '2026-09-01T08:00:00.000Z',
+        endsAt: '2026-09-01T16:00:00.000Z',
+      });
+
+      expect(realtime.emitToCompany).not.toHaveBeenCalled();
+    });
   });
 
   describe('update', () => {
@@ -209,6 +222,24 @@ describe('ShiftsService', () => {
         },
       });
     });
+
+    it('does not emit a realtime event for a plain field edit on a draft', async () => {
+      prisma.shift.findFirst.mockResolvedValue(existingShift);
+      prisma.shift.update.mockResolvedValue({ id: 'shift-1' });
+
+      await service.update('company-a', 'shift-1', { roleNeeded: 'Serveur' });
+
+      expect(realtime.emitToCompany).not.toHaveBeenCalled();
+    });
+
+    it('emits a realtime event only when the shift is explicitly published', async () => {
+      prisma.shift.findFirst.mockResolvedValue(existingShift);
+      prisma.shift.update.mockResolvedValue({ id: 'shift-1', status: 'published' });
+
+      await service.update('company-a', 'shift-1', { status: 'published' });
+
+      expect(realtime.emitToCompany).toHaveBeenCalledWith('company-a', 'shifts:changed');
+    });
   });
 
   describe('remove', () => {
@@ -235,6 +266,7 @@ describe('ShiftsService', () => {
       });
       expect(prisma.shiftAssignment.deleteMany).toHaveBeenCalledWith({ where: { shiftId: 'shift-1' } });
       expect(prisma.shift.delete).toHaveBeenCalledWith({ where: { id: 'shift-1' } });
+      expect(realtime.emitToCompany).not.toHaveBeenCalled();
     });
   });
 
@@ -337,6 +369,7 @@ describe('ShiftsService', () => {
       expect(prisma.shiftAssignment.create).toHaveBeenCalledWith({
         data: { shiftId: 'shift-1', userId: 'user-1', status: 'assigned' },
       });
+      expect(realtime.emitToCompany).not.toHaveBeenCalled();
     });
 
     it('blocks assigning when the employee declared no availability at all for that day', async () => {

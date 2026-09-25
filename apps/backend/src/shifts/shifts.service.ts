@@ -37,7 +37,13 @@ export class ShiftsService {
         createdBy,
       },
     });
-    this.realtime.emitToCompany(companyId, 'shifts:changed');
+    // Pas d'émission ici : un brouillon n'est visible de personne d'autre
+    // que le manager qui le crée (voir décision #15) — rafraîchir les
+    // autres clients en direct pendant le travail de mise en place du
+    // planning n'a aucun intérêt et ne fait que perturber l'écran des
+    // autres managers pendant qu'eux-mêmes glissent-déposent. Seul le
+    // passage explicite à "published" (voir update()) prévient les autres
+    // clients.
     return shift;
   }
 
@@ -176,7 +182,16 @@ export class ShiftsService {
         ...(dto.status ? { status: dto.status } : {}),
       },
     });
-    this.realtime.emitToCompany(companyId, 'shifts:changed');
+    // On ne notifie les autres clients que sur le vrai passage à "published"
+    // (bouton Publier d'une carte, "Publier N brouillons", ou changement de
+    // statut via l'éditeur générique) — c'est le seul moment où le contenu
+    // change réellement pour un employé ou un autre manager qui n'a pas
+    // cette page ouverte. Un simple ajustement d'horaire/rôle sur un
+    // brouillon reste un détail de mise en place du planning, pas une
+    // information à pousser en direct.
+    if (dto.status === 'published') {
+      this.realtime.emitToCompany(companyId, 'shifts:changed');
+    }
     return shift;
   }
 
@@ -198,7 +213,9 @@ export class ShiftsService {
       this.prisma.shiftAssignment.deleteMany({ where: { shiftId: id } }),
       this.prisma.shift.delete({ where: { id } }),
     ]);
-    this.realtime.emitToCompany(companyId, 'shifts:changed');
+    // Même logique que create()/update() : supprimer un shift fait partie du
+    // travail de mise en place du planning, pas de la publication — pas
+    // d'émission en direct pour autant.
   }
 
   // Un shift = un seul employé assigné à la fois.
@@ -229,7 +246,10 @@ export class ShiftsService {
     const assignment = await this.prisma.shiftAssignment.create({
       data: { shiftId, userId: dto.userId, status: 'assigned' },
     });
-    this.realtime.emitToCompany(companyId, 'shifts:changed');
+    // Assigner un employé sur la grille est aussi un geste de préparation du
+    // planning (souvent sur un brouillon) — pas d'émission ici, seule la
+    // publication (update() avec status: 'published') prévient les autres
+    // clients. Voir CLAUDE.md décision #23.
     return assignment;
   }
 
