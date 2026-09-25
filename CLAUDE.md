@@ -480,6 +480,45 @@ Cible : PME de 20-100 employés par site.
       (30s web, aucun avant côté mobile) **en filet de sécurité** — le
       websocket accélère juste le rafraîchissement, il ne le remplace pas.
 
+24. **Une ligne `Availability` avec `isAvailable: true` doit toujours être
+    "toute la journée" (`00:00`/`23:59`) en pratique — ne plus jamais générer
+    de fenêtre restreinte pour `isAvailable: true`, y compris dans le seed.**
+    Bug remonté en prod (Nabil Amrani mardi, Eric Employé jeudi) : le jeu de
+    données seed créait des lignes `isAvailable: true` avec de vraies heures
+    (ex. `08:00-17:00`, avant la simplification de décision #8) ; côté
+    mobile, `AvailabilitiesScreen` affiche `isAvailable: true` comme
+    "Disponible" plein et simple, **sans jamais montrer ni permettre
+    d'éditer ces heures** — donc rien sur le téléphone n'indiquait la
+    restriction. Mais `ShiftsService.assign`/`isEmployeeAvailableForShift`
+    (décision #8) continuaient à l'appliquer à la lettre, rejetant en
+    silence toute dépose qui dépassait cette fenêtre invisible : une case
+    visuellement libre (aucune étiquette dans la grille, décision #14) qui
+    refusait pourtant l'assignation, sans le moindre message. Un premier
+    correctif purement visuel (afficher la fenêtre dans la grille) a été
+    tenté puis **annulé** : le seed générait une fenêtre restreinte sur
+    quasi tous les jours "Disponible" des 5 premiers employés, donc l'ajout
+    aurait couvert la majorité de la grille de dégradés rouges — bruyant, et
+    ça ne réglait pas le vrai problème (le mobile continuait de ne rien
+    montrer de cohérent avec ça).
+    - **Correction appliquée** : toutes les lignes `isAvailable: true`
+      existantes en base (prod comprise) ont été normalisées à
+      `startTime: '00:00'`/`endTime: '23:59'` — un nettoyage de données, pas
+      un changement de logique. Les lignes `isAvailable: false` n'ont pas
+      été touchées (leurs plages, pleines ou à un bord, restent des
+      indisponibilités réellement déclarables et affichées, décision #14).
+    - **`seed.ts` corrigé en conséquence** : les lignes générées avec
+      `isAvailable: true` sont désormais toujours `00:00`-`23:59` ; seules
+      les lignes `isAvailable: false` gardent de la variété (journée entière,
+      ou un seul bord personnalisé — `'from'`/`'until'`, jamais les deux,
+      voir décision #8) pour continuer à exercer l'affichage partiel de la
+      grille. Ne pas réintroduire d'heures précises pour `isAvailable: true`
+      dans le seed sans revenir sur ce choix.
+    - Le check d'heures dans `ensureAvailable`/`isEmployeeAvailableForShift`
+      pour la branche `isAvailable: true` (décision #8) reste dans le code —
+      ce n'est pas mort, une ligne créée hors de l'app (import, appel API
+      direct) pourrait encore l'exercer légitimement — mais aucune donnée
+      vivante générée par l'app ou le seed ne doit plus jamais en produire.
+
 ## Stack
 
 - Backend : NestJS + PostgreSQL + Prisma + Passport/JWT

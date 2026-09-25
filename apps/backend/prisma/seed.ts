@@ -338,16 +338,30 @@ async function main() {
   for (const emp of employees.slice(0, 5)) {
     for (let day = 0; day <= 5; day++) {
       const isAvailable = Math.random() > 0.2;
-      // Indisponible = toute la journée par défaut dans le jeu de démo (pas
-      // de plage restreinte) — voir FULL_DAY_START/END dans
-      // ShiftsService.ensureAvailable, ces bornes précises ont un sens
-      // désormais (elles ne sont plus ignorées quand isAvailable est false).
+      // "Disponible" = toujours toute la journée — voir AvailabilitiesScreen
+      // (checkin-mobile) : l'écran n'envoie plus jamais d'heures restreintes
+      // pour isAvailable:true (décision #8), donc une ligne avec des heures
+      // précises ici ne correspondrait plus à rien que l'app puisse afficher
+      // ou éditer : un employé la verrait comme "Disponible" sans limite,
+      // pendant que le backend continuerait à bloquer silencieusement en
+      // dehors de ces heures (bug remonté en prod sur Nabil Amrani/Eric
+      // Employé — cases visuellement libres qui refusaient toute dépose hors
+      // d'une fenêtre invisible). "Indisponible" garde de la variété (journée
+      // entière ou plage à un seul bord) pour continuer à exercer l'affichage
+      // partiel de la grille planning (décision #14).
+      let startTime = '00:00';
+      let endTime = '23:59';
+      if (!isAvailable) {
+        const shape = pick(['full', 'from', 'until'] as const);
+        if (shape === 'from') startTime = pick(['12:00', '17:00', '18:00']);
+        if (shape === 'until') endTime = pick(['09:00', '12:00', '14:00']);
+      }
       await prisma.availability.create({
         data: {
           userId: emp.id,
           dayOfWeek: day,
-          startTime: isAvailable ? pick(['08:00', '09:00', '12:00']) : '00:00',
-          endTime: isAvailable ? pick(['16:00', '17:00', '20:00']) : '23:59',
+          startTime,
+          endTime,
           isAvailable,
         },
       });
